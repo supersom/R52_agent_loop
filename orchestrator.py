@@ -369,8 +369,8 @@ def main():
         history.append({
             "attempt": attempt,
             "prompt": current_prompt,
-            "generated_code": generated_code,
-            "diff": diff_str
+            "generated_code": generated_code.splitlines(),
+            "diff": diff_str.splitlines()
         })
         
         # Dump run history to JSON immediately after LLM response
