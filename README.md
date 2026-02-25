@@ -65,7 +65,7 @@ python3 orchestrator.py
 Run the Fibonacci prompt:
 
 ```bash
-python3 orchestrator.py --prompt prompts/fibonacci.txt --expected "5"
+python3 orchestrator.py --prompt prompts/fibonacci.txt --expected "FIB: 5"
 ```
 
 Use the DS-5/FVP toolchain path:
