@@ -5,6 +5,8 @@ import json
 import time
 import argparse
 import difflib
+import shutil
+from datetime import datetime
 
 # You can use the `google-genai` package or direct API calls for the LLM part later.
 # For now, we stub out the LLM call.
@@ -60,7 +62,7 @@ FVP_BIN = os.environ.get(
     "/opt/arm/developmentstudio-2025.0-1/bin/FVP_BaseR_Cortex-R52"
 )
 
-def call_llm(prompt: str) -> str:
+def call_llm(prompt: str, code_dir: str) -> str:
     """
     Calls the local `gemini` CLI to generate the code.
     """
@@ -68,15 +70,15 @@ def call_llm(prompt: str) -> str:
     print(f"[LLM] --- Prompt Sent ---\n{prompt}\n-----------------------")
     
     # We write the prompt to a temp file to avoid command-line length limits
-    prompt_file = os.path.join(WORKSPACE, "current_prompt.txt")
+    prompt_file = os.path.join(code_dir, "current_prompt.txt")
     with open(prompt_file, "w") as f:
         f.write(prompt)
         
     try:
         # We pass the prompt as the positional argument.
         # We also pass -y to make it one-shot and --model to ensure it uses the right model.
-        print("[LLM] --- Streaming Response (Debug logs routed to llm_debug.log) ---")
-        debug_log_path = os.path.join(WORKSPACE, "llm_debug.log")
+        print(f"[LLM] --- Streaming Response (Debug logs routed to {os.path.join(code_dir, 'llm_debug.log')}) ---")
+        debug_log_path = os.path.join(code_dir, "llm_debug.log")
         
         with open(debug_log_path, "a") as debug_file:
             debug_file.write(f"\n\n--- New Prompt Execution (Length: {len(prompt)}) ---\n")
@@ -124,12 +126,13 @@ def call_llm(prompt: str) -> str:
         print(f"[LLM] Error calling Gemini CLI: {e.stderr}")
         return "    .global _start\n_start:\n    mov r0, #42\n"
 
-def compile_code(source_file, elf_file, toolchain):
+def compile_code(source_file, elf_file, toolchain, code_dir):
     """
     Compile the generated code.
     Returns (success: bool, error_message: str)
     """
     print(f"\n[Compiler] Compiling {source_file} using {toolchain}...")
+    obj_file = os.path.join(code_dir, "agent_code.o")
     
     if toolchain == "ds5":
         # ARM Compiler 6 (armclang + armlink)
@@ -139,13 +142,13 @@ def compile_code(source_file, elf_file, toolchain):
             "-mcpu=cortex-r52",
             "-O0", "-c",
             source_file,
-            "-o", OBJ_FILE
+            "-o", obj_file
         ]
         link_cmd = [
             ARMLINK_BIN,
             "--ro-base=0x00000000",
             "--entry=_start",
-            OBJ_FILE,
+            obj_file,
             "-o", elf_file
         ]
         
@@ -211,7 +214,25 @@ def run_in_simulator(elf_file, toolchain, timeout_sec=5):
     except Exception as e:
         return False, str(e), False
 
+def check_git_status():
+    """
+    Check if there are uncommitted changes. If so, ask the user if they want to proceed.
+    """
+    try:
+        result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True)
+        if result.stdout.strip():
+            print("\n[Warning] You have uncommitted changes in your repository:")
+            print(result.stdout)
+            choice = input("Do you really want to proceed? (y/N): ").strip().lower()
+            if choice != 'y':
+                print("Aborting.")
+                sys.exit(0)
+    except subprocess.CalledProcessError:
+        pass # Not a git repo or git not installed
+
 def main():
+    check_git_status()
+    
     parser = argparse.ArgumentParser(description="Agentic ARM Development Loop")
     parser.add_argument("--toolchain", choices=["gcc", "ds5"], default="gcc", help="Toolchain to use (gcc or ds5)")
     parser.add_argument("--source", type=str, help="Path to an existing folder of code to start with.", default=None)
