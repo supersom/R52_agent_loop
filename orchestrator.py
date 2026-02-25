@@ -13,9 +13,10 @@ from datetime import datetime
 
 MAX_RETRIES = 5
 WORKSPACE = os.path.dirname(os.path.abspath(__file__))
-SOURCE_FILE = os.path.join(WORKSPACE, "agent_code.s")
-ELF_FILE = os.path.join(WORKSPACE, "agent_code.elf")
-OBJ_FILE = os.path.join(WORKSPACE, "agent_code.o")
+CODE_ROOT = os.path.join(WORKSPACE, "code")
+GENERATED_SOURCE_NAME = "agent_code.s"
+GENERATED_ELF_NAME = "agent_code.elf"
+GENERATED_OBJ_NAME = "agent_code.o"
 
 def load_dotenv(dotenv_path: str) -> None:
     """
@@ -61,6 +62,29 @@ FVP_BIN = os.environ.get(
     "FVP_BIN",
     "/opt/arm/developmentstudio-2025.0-1/bin/FVP_BaseR_Cortex-R52"
 )
+
+def get_prompt_run_dir(prompt_path: str) -> str:
+    """
+    Resolve the working output directory for a prompt file.
+    Example: prompts/prime_sum.txt -> ./code/prime_sum.txt
+    """
+    prompt_name = os.path.basename(prompt_path)
+    return os.path.join(CODE_ROOT, prompt_name)
+
+def snapshot_successful_run(code_dir: str) -> str:
+    """
+    Copy top-level generated files from the active prompt directory into a timestamped snapshot.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    snapshot_dir = os.path.join(code_dir, timestamp)
+    os.makedirs(snapshot_dir, exist_ok=False)
+
+    for name in os.listdir(code_dir):
+        src_path = os.path.join(code_dir, name)
+        if os.path.isfile(src_path):
+            shutil.copy2(src_path, os.path.join(snapshot_dir, name))
+
+    return snapshot_dir
 
 def call_llm(prompt: str, code_dir: str) -> str:
     """
@@ -132,7 +156,7 @@ def compile_code(source_file, elf_file, toolchain, code_dir):
     Returns (success: bool, error_message: str)
     """
     print(f"\n[Compiler] Compiling {source_file} using {toolchain}...")
-    obj_file = os.path.join(code_dir, "agent_code.o")
+    obj_file = os.path.join(code_dir, GENERATED_OBJ_NAME)
     
     if toolchain == "ds5":
         # ARM Compiler 6 (armclang + armlink)
@@ -273,6 +297,14 @@ def main():
     with open(prompt_path, 'r') as f:
         base_prompt_text = f.read()
 
+    code_dir = get_prompt_run_dir(prompt_path)
+    os.makedirs(code_dir, exist_ok=True)
+    source_file = os.path.join(code_dir, GENERATED_SOURCE_NAME)
+    elf_file = os.path.join(code_dir, GENERATED_ELF_NAME)
+    history_file = os.path.join(code_dir, "run_history.json")
+
+    print(f"[Info] Prompt outputs will be written to {code_dir}")
+
     # Format the dynamic parts of the prompt
     formatted_prompt = base_prompt_text.format(
         uart_addr=uart_addr,
@@ -297,7 +329,7 @@ def main():
         print(f"\n--- Attempt {attempt}/{MAX_RETRIES} ---")
         
         # 1. Ask the Agent to write/fix the code
-        generated_code = call_llm(current_prompt)
+        generated_code = call_llm(current_prompt, code_dir)
         
         # Compute diff
         diff = list(difflib.unified_diff(
@@ -317,18 +349,17 @@ def main():
         })
         
         # Dump run history to JSON immediately after LLM response
-        history_file = os.path.join(WORKSPACE, "run_history.json")
         with open(history_file, "w") as f:
             json.dump(history, f, indent=4)
         
         previous_code = generated_code
         
         # 2. Save it to disk
-        with open(SOURCE_FILE, "w") as f:
+        with open(source_file, "w") as f:
             f.write(generated_code)
             
         # 3. Try to compile it
-        compile_success, compile_error = compile_code(SOURCE_FILE, ELF_FILE, args.toolchain)
+        compile_success, compile_error = compile_code(source_file, elf_file, args.toolchain, code_dir)
         
         if not compile_success:
             print(f"[Loop] Compilation failed. Feeding error back to agent...")
@@ -347,7 +378,7 @@ def main():
         current_timeout = timeout_sec
         
         for sim_attempt in range(3):
-            success, output, t_out = run_in_simulator(ELF_FILE, args.toolchain, current_timeout)
+            success, output, t_out = run_in_simulator(elf_file, args.toolchain, current_timeout)
             run_output = output
             if not t_out:
                 run_success = success
@@ -378,13 +409,15 @@ def main():
             continue
             
         # 6. Success!
+        snapshot_dir = snapshot_successful_run(code_dir)
         print("\n=== SUCCESS! The agent wrote working ARM code! ===")
         print("Final Output:\n", run_output)
+        print(f"[Info] Snapshot saved to {snapshot_dir}")
         break
     else:
         print(f"\n=== FAILED: Agent could not fix the code after {MAX_RETRIES} attempts ===")
 
-    print(f"\n[Info] Final run history saved to {os.path.join(WORKSPACE, 'run_history.json')}")
+    print(f"\n[Info] Final run history saved to {history_file}")
 
 if __name__ == "__main__":
     main()
