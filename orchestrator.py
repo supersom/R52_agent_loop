@@ -98,6 +98,8 @@ def build_llm_system_prompt(code_dir: str) -> str:
         f"(absolute path: '{code_dir}').\n"
         "Do not suggest or rely on modifying files outside that folder.\n"
         "Treat files outside that folder as read-only context.\n"
+        "Do not hardcode the full expected output string verbatim if it contains the result.\n"
+        "Compute the requested result in code and construct/emit the output from that computed value.\n"
         "Return only the requested source code content.\n"
     )
 
