@@ -86,10 +86,26 @@ def snapshot_successful_run(code_dir: str) -> str:
 
     return snapshot_dir
 
-def call_llm(prompt: str, code_dir: str) -> str:
+def build_llm_system_prompt(code_dir: str) -> str:
+    """
+    Constrain the agent to the active per-prompt output folder.
+    """
+    rel_code_dir = os.path.relpath(code_dir, WORKSPACE)
+    return (
+        "SYSTEM INSTRUCTION:\n"
+        "You are generating code for a constrained workspace run.\n"
+        f"The active writable output folder is '{rel_code_dir}' "
+        f"(absolute path: '{code_dir}').\n"
+        "Do not suggest or rely on modifying files outside that folder.\n"
+        "Treat files outside that folder as read-only context.\n"
+        "Return only the requested source code content.\n"
+    )
+
+def call_llm(input_prompt: str, code_dir: str) -> str:
     """
     Calls the local `gemini` CLI to generate the code.
     """
+    prompt = f"{build_llm_system_prompt(code_dir)}\n{input_prompt}"
     print(f"\n[LLM] Generating code... (Prompt length: {len(prompt)})")
     print(f"[LLM] --- Prompt Sent ---\n{prompt}\n-----------------------")
     
