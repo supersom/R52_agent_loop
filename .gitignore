@@ -4,3 +4,4 @@ __pycache__/
 *.elf
 current_prompt.txt
 run_history.json
+code/
