@@ -106,13 +106,20 @@ def call_llm(prompt: str, code_dir: str) -> str:
         
         with open(debug_log_path, "a") as debug_file:
             debug_file.write(f"\n\n--- New Prompt Execution (Length: {len(prompt)}) ---\n")
+            use_stdin_prompt = len(prompt) > 8000
+            gemini_cmd = ["gemini", "-y", "-d"] if use_stdin_prompt else ["gemini", "-y", "-d", prompt]
             process = subprocess.Popen(
-                ["gemini", "-d", prompt], # Enable debug logs
+                gemini_cmd, # Enable debug logs
+                stdin=subprocess.PIPE if use_stdin_prompt else None,
                 stdout=subprocess.PIPE,
                 stderr=debug_file, # Route stderr directly to the log file
                 text=True,
                 bufsize=1
             )
+
+            if use_stdin_prompt and process.stdin is not None:
+                process.stdin.write(prompt)
+                process.stdin.close()
             
             response_lines = []
             for line in iter(process.stdout.readline, ''):
