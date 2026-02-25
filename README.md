@@ -32,6 +32,28 @@ Optional for `ds5` path:
 Optional helper:
 - `jq` (for `view_run_history.sh`)
 
+## Configuration (.env / Environment Variables)
+
+For the `ds5` toolchain path, `orchestrator.py` can read binary locations from a local `.env` file or from environment variables.
+
+Supported variables:
+- `ARMCLANG_BIN`
+- `ARMLINK_BIN`
+- `FVP_BIN`
+
+Precedence:
+- existing environment variables
+- `.env` values in the project root
+- built-in defaults (the current hardcoded paths)
+
+Example `.env`:
+
+```bash
+ARMCLANG_BIN=/opt/arm/developmentstudio-2025.0-1/sw/ARMCompiler6.24/bin/armclang
+ARMLINK_BIN=/opt/arm/developmentstudio-2025.0-1/sw/ARMCompiler6.24/bin/armlink
+FVP_BIN=/opt/arm/developmentstudio-2025.0-1/bin/FVP_BaseR_Cortex-R52
+```
+
 ## Usage
 
 Run the default prime-sum prompt with GCC + QEMU:
@@ -83,4 +105,4 @@ Generated/local artifacts (ignored by git):
 
 - The script writes the full prompt to `current_prompt.txt` and appends Gemini debug stderr to `llm_debug.log`.
 - Run history is saved after each LLM attempt in `run_history.json`, including prompt, generated code, and diff from the previous attempt.
-- DS-5/FVP binary paths are hardcoded in `orchestrator.py`; update them for your environment if needed.
+- DS-5/FVP paths can now be overridden with `.env` or environment variables; if none are set, the script uses the built-in defaults.

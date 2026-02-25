@@ -15,10 +15,50 @@ SOURCE_FILE = os.path.join(WORKSPACE, "agent_code.s")
 ELF_FILE = os.path.join(WORKSPACE, "agent_code.elf")
 OBJ_FILE = os.path.join(WORKSPACE, "agent_code.o")
 
+def load_dotenv(dotenv_path: str) -> None:
+    """
+    Load simple KEY=VALUE pairs from a .env file into os.environ.
+    Existing environment variables are preserved.
+    """
+    if not os.path.exists(dotenv_path):
+        return
+
+    try:
+        with open(dotenv_path, "r") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+
+                if not key:
+                    continue
+
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+
+                os.environ.setdefault(key, value)
+    except OSError as e:
+        print(f"[Config] Warning: Could not read {dotenv_path}: {e}")
+
+load_dotenv(os.path.join(WORKSPACE, ".env"))
+
 # DS-5 / ARMCompiler6 paths
-ARMCLANG_BIN = "/opt/arm/developmentstudio-2025.0-1/sw/ARMCompiler6.24/bin/armclang"
-ARMLINK_BIN = "/opt/arm/developmentstudio-2025.0-1/sw/ARMCompiler6.24/bin/armlink"
-FVP_BIN = "/opt/arm/developmentstudio-2025.0-1/bin/FVP_BaseR_Cortex-R52"
+ARMCLANG_BIN = os.environ.get(
+    "ARMCLANG_BIN",
+    "/opt/arm/developmentstudio-2025.0-1/sw/ARMCompiler6.24/bin/armclang"
+)
+ARMLINK_BIN = os.environ.get(
+    "ARMLINK_BIN",
+    "/opt/arm/developmentstudio-2025.0-1/sw/ARMCompiler6.24/bin/armlink"
+)
+FVP_BIN = os.environ.get(
+    "FVP_BIN",
+    "/opt/arm/developmentstudio-2025.0-1/bin/FVP_BaseR_Cortex-R52"
+)
 
 def call_llm(prompt: str) -> str:
     """
