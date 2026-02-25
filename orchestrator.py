@@ -66,9 +66,9 @@ FVP_BIN = os.environ.get(
 def get_prompt_run_dir(prompt_path: str) -> str:
     """
     Resolve the working output directory for a prompt file.
-    Example: prompts/prime_sum.txt -> ./code/prime_sum.txt
+    Example: prompts/prime_sum.txt -> ./code/prime_sum
     """
-    prompt_name = os.path.basename(prompt_path)
+    prompt_name = os.path.splitext(os.path.basename(prompt_path))[0] # Strip extension for cleaner directories
     return os.path.join(CODE_ROOT, prompt_name)
 
 def snapshot_successful_run(code_dir: str) -> str:
