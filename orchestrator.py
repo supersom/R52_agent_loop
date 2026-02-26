@@ -6,6 +6,7 @@ import time
 import argparse
 import difflib
 import shutil
+import re
 from datetime import datetime
 
 # You can use the `google-genai` package or direct API calls for the LLM part later.
@@ -153,6 +154,69 @@ def build_patch_retry_prompt(current_source: str, issue_text: str) -> str:
         f"{current_source}\n"
         "```\n"
     )
+
+def apply_unified_diff_patch(original_text: str, patch_text: str) -> str:
+    """
+    Apply a single-file unified diff patch to text and return the patched result.
+    """
+    patch_lines = patch_text.splitlines(keepends=True)
+    hunk_start = next((i for i, line in enumerate(patch_lines) if line.startswith("@@")), None)
+    if hunk_start is None:
+        raise ValueError("No unified diff hunk found in LLM response")
+
+    patch_lines = patch_lines[hunk_start:]
+    original_lines = original_text.splitlines(keepends=True)
+    output_lines = []
+    orig_idx = 0
+    i = 0
+
+    hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+    while i < len(patch_lines):
+        header = patch_lines[i]
+        if not header.startswith("@@"):
+            raise ValueError(f"Unexpected patch content outside hunk: {header.rstrip()}")
+
+        match = hunk_re.match(header)
+        if not match:
+            raise ValueError(f"Malformed unified diff hunk header: {header.rstrip()}")
+
+        start_old = int(match.group(1))
+        target_orig_idx = max(start_old - 1, 0)
+        if target_orig_idx < orig_idx:
+            raise ValueError("Patch hunks are out of order")
+
+        output_lines.extend(original_lines[orig_idx:target_orig_idx])
+        orig_idx = target_orig_idx
+        i += 1
+
+        while i < len(patch_lines) and not patch_lines[i].startswith("@@"):
+            line = patch_lines[i]
+            if line.startswith("\\ No newline at end of file"):
+                i += 1
+                continue
+            if not line:
+                raise ValueError("Empty patch line in hunk")
+
+            op = line[0]
+            text = line[1:]
+            if op == " ":
+                if orig_idx >= len(original_lines) or original_lines[orig_idx] != text:
+                    raise ValueError("Patch context does not match current source")
+                output_lines.append(original_lines[orig_idx])
+                orig_idx += 1
+            elif op == "-":
+                if orig_idx >= len(original_lines) or original_lines[orig_idx] != text:
+                    raise ValueError("Patch deletion does not match current source")
+                orig_idx += 1
+            elif op == "+":
+                output_lines.append(text)
+            else:
+                raise ValueError(f"Unsupported patch line prefix: {op}")
+            i += 1
+
+    output_lines.extend(original_lines[orig_idx:])
+    return "".join(output_lines)
 
 def call_llm(input_prompt: str, code_dir: str, task_contract_prompt: str = "") -> str:
     """
