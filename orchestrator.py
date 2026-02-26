@@ -129,6 +129,31 @@ def build_task_contract_prompt(
         f"{formatted_prompt}\n"
     )
 
+def build_patch_retry_prompt(current_source: str, issue_text: str) -> str:
+    """
+    Ask the LLM to minimally patch the current source instead of rewriting it.
+    """
+    return (
+        f"{issue_text}\n\n"
+        "Apply the smallest possible fix to the current `agent_code.s`.\n"
+        "Return ONLY a unified diff patch for `agent_code.s` (no prose, no markdown).\n"
+        "PATCH ACCURACY RULES (critical):\n"
+        "- The unified diff must apply cleanly to the CURRENT `agent_code.s` shown below.\n"
+        "- Copy unchanged context lines VERBATIM from the current file, including blank lines, spaces, and comments.\n"
+        "- Do not guess hunk headers. Ensure each `@@ -old,+new @@` header matches the exact context positions in the current file.\n"
+        "- The first context line after each hunk header must exactly match the current file at that old-line position.\n"
+        "- Do not include prose, explanations, markdown fences, or any text before/after the patch.\n"
+        "Expected format:\n"
+        "--- agent_code.s\n"
+        "+++ agent_code.s\n"
+        "@@ ... @@\n"
+        "...\n\n"
+        "Current `agent_code.s`:\n"
+        "```assembly\n"
+        f"{current_source}\n"
+        "```\n"
+    )
+
 def call_llm(input_prompt: str, code_dir: str, task_contract_prompt: str = "") -> str:
     """
     Calls the local `gemini` CLI to generate the code.
