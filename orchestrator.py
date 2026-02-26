@@ -12,7 +12,7 @@ from datetime import datetime
 # You can use the `google-genai` package or direct API calls for the LLM part later.
 # For now, we stub out the LLM call.
 
-MAX_RETRIES = 5
+MAX_RETRIES = 10
 WORKSPACE = os.path.dirname(os.path.abspath(__file__))
 CODE_ROOT = os.path.join(WORKSPACE, "code")
 GENERATED_SOURCE_NAME = "agent_code.s"
@@ -575,16 +575,39 @@ def main():
     )
     
     current_prompt = initial_prompt
+    response_mode = "full_source"
     timeout_sec = 2
     
     history = []
-    previous_code = existing_code_context if existing_code_context else ""
+    current_source = ""
+    if os.path.exists(source_file):
+        with open(source_file, "r") as f:
+            current_source = f.read()
+        print(f"[Info] Loaded existing working source from {source_file} for iterative updates")
     
     for attempt in range(1, MAX_RETRIES + 1):
         print(f"\n--- Attempt {attempt}/{MAX_RETRIES} ---")
         
         # 1. Ask the Agent to write/fix the code
-        generated_code = call_llm(current_prompt, code_dir, task_contract_prompt)
+        llm_response = call_llm(current_prompt, code_dir, task_contract_prompt)
+        previous_code = current_source
+        if response_mode == "patch":
+            try:
+                generated_code = apply_unified_diff_patch(current_source, llm_response)
+            except ValueError as e:
+                print(f"[Loop] Could not apply patch response: {e}")
+                current_prompt = build_patch_retry_prompt(
+                    current_source,
+                    (
+                        "Your previous response could not be applied as a unified diff patch.\n"
+                        f"Patch apply error: {e}\n\n"
+                        "Return a valid unified diff patch against the current `agent_code.s`."
+                    )
+                )
+                response_mode = "patch"
+                continue
+        else:
+            generated_code = llm_response
         
         # Compute diff
         diff = list(difflib.unified_diff(
@@ -607,7 +630,7 @@ def main():
         with open(history_file, "w") as f:
             json.dump(history, f, indent=4)
         
-        previous_code = generated_code
+        current_source = generated_code
         
         # 2. Save it to disk
         with open(source_file, "w") as f:
@@ -618,11 +641,15 @@ def main():
         
         if not compile_success:
             print(f"[Loop] Compilation failed. Feeding error back to agent...")
-            current_prompt = (
-                f"Your previous code failed to compile with the following error:\n"
-                f"{compile_error}\n\n"
-                f"Please fix the code and return ONLY the corrected assembly/C code."
+            current_prompt = build_patch_retry_prompt(
+                current_source,
+                (
+                    "Your previous code failed to compile with the following error:\n"
+                    f"{compile_error}\n\n"
+                    "Please fix the code."
+                )
             )
+            response_mode = "patch"
             continue # Try again!
             
         # 4. If it compiled, try to run it in the simulator
@@ -646,21 +673,29 @@ def main():
                 
         if timed_out:
             print(f"[Loop] Code consistently timed out. Feeding back to agent...")
-            current_prompt = (
-                f"The code compiled successfully, but running it in {board_name} timed out after multiple attempts.\n"
-                f"Output before timeout:\n{run_output}\n\n"
-                f"Ensure you are not stuck in an infinite loop before printing the required output. Please fix the logic and try again."
+            current_prompt = build_patch_retry_prompt(
+                current_source,
+                (
+                    f"The code compiled successfully, but running it in {board_name} timed out after multiple attempts.\n"
+                    f"Output before timeout:\n{run_output}\n\n"
+                    "Ensure you are not stuck in an infinite loop before printing the required output. Please fix the logic."
+                )
             )
+            response_mode = "patch"
             continue
         
         # 5. Check strictly for the expected unique string to avoid FVP boot log false positives
         if not run_success or args.expected not in run_output:
             print(f"[Loop] Runtime failed or output was incorrect. Output:\n{run_output}")
-            current_prompt = (
-                f"The code compiled successfully and completed, but the expected output was not found.\n"
-                f"Output:\n{run_output}\n\n"
-                f"We expect the exact string '{args.expected}' to be printed to the UART. Please fix the logic and try again."
+            current_prompt = build_patch_retry_prompt(
+                current_source,
+                (
+                    "The code compiled successfully and completed, but the expected output was not found.\n"
+                    f"Output:\n{run_output}\n\n"
+                    f"We expect the exact string '{args.expected}' to be printed to the UART. Please fix the logic."
+                )
             )
+            response_mode = "patch"
             continue
             
         # 6. Success!
