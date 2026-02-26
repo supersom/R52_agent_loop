@@ -580,6 +580,13 @@ def main():
     last_attempt_feedback = ""
     
     history = []
+    def history_lines(text: str | None):
+        return None if text is None else text.splitlines()
+
+    def flush_history() -> None:
+        with open(history_file, "w") as f:
+            json.dump(history, f, indent=4)
+
     current_source = ""
     if os.path.exists(source_file):
         with open(source_file, "r") as f:
@@ -593,10 +600,33 @@ def main():
         llm_response = call_llm(current_prompt, code_dir, task_contract_prompt)
         previous_code = current_source
         if response_mode == "patch":
+            sanitized_patch = llm_response
+            patch_output_sanitized = False
             try:
-                generated_code = apply_unified_diff_patch(current_source, llm_response)
+                sanitized_patch = sanitize_unified_diff_patch_text(llm_response, current_source)
+                patch_output_sanitized = sanitized_patch != llm_response
+                if patch_output_sanitized:
+                    print("[Loop] Stripped trailing non-diff output from patch response before applying.")
+                generated_code = apply_unified_diff_patch(current_source, sanitized_patch)
             except ValueError as e:
                 print(f"[Loop] Could not apply patch response: {e}")
+                history.append({
+                    "attempt": attempt,
+                    "prompt": current_prompt,
+                    "response_mode": response_mode,
+                    "generated_code": llm_response.splitlines(),
+                    "diff": [],
+                    "patch_apply_success": False,
+                    "patch_apply_error": str(e),
+                    "patch_output_sanitized": patch_output_sanitized,
+                    "compile_success": None,
+                    "compile_error": None,
+                    "run_success": None,
+                    "run_output": None,
+                    "timed_out": None,
+                    "attempt_result": "patch_apply_failed",
+                })
+                flush_history()
                 patch_apply_issue = (
                     "Your previous response could not be applied as a unified diff patch.\n"
                     + f"Patch apply error: {e}\n"
@@ -645,13 +675,23 @@ def main():
         history.append({
             "attempt": attempt,
             "prompt": current_prompt,
+            "response_mode": response_mode,
             "generated_code": generated_code.splitlines(),
-            "diff": diff_str.splitlines()
+            "diff": diff_str.splitlines(),
+            "patch_apply_success": True if response_mode == "patch" else None,
+            "patch_apply_error": None,
+            "patch_output_sanitized": patch_output_sanitized if response_mode == "patch" else None,
+            "compile_success": None,
+            "compile_error": None,
+            "run_success": None,
+            "run_output": None,
+            "timed_out": None,
+            "attempt_result": "generated",
         })
         
         # Dump run history to JSON immediately after LLM response
-        with open(history_file, "w") as f:
-            json.dump(history, f, indent=4)
+        flush_history()
+        entry = history[-1]
         
         current_source = generated_code
         
@@ -661,8 +701,12 @@ def main():
             
         # 3. Try to compile it
         compile_success, compile_error = compile_code(source_file, elf_file, args.toolchain, code_dir)
+        entry["compile_success"] = compile_success
+        entry["compile_error"] = history_lines(compile_error if compile_error else None)
         
         if not compile_success:
+            entry["attempt_result"] = "compile_failed"
+            flush_history()
             print(f"[Loop] Compilation failed. Feeding error back to agent...")
             last_attempt_feedback = (
                 "Compilation failed with this error output:\n"
@@ -699,6 +743,11 @@ def main():
                 timed_out = True
                 
         if timed_out:
+            entry["run_success"] = False
+            entry["run_output"] = history_lines(run_output)
+            entry["timed_out"] = True
+            entry["attempt_result"] = "run_timed_out"
+            flush_history()
             print(f"[Loop] Code consistently timed out. Feeding back to agent...")
             last_attempt_feedback = (
                 f"Simulator output before timeout in {board_name}:\n"
@@ -717,6 +766,11 @@ def main():
         
         # 5. Check strictly for the expected unique string to avoid FVP boot log false positives
         if not run_success or args.expected not in run_output:
+            entry["run_success"] = run_success
+            entry["run_output"] = history_lines(run_output)
+            entry["timed_out"] = False
+            entry["attempt_result"] = "run_output_mismatch" if run_success else "run_failed"
+            flush_history()
             print(f"[Loop] Runtime failed or output was incorrect. Output:\n{run_output}")
             last_attempt_feedback = (
                 "Runtime completed but expected output was not found. Full simulator output:\n"
@@ -734,6 +788,11 @@ def main():
             continue
             
         # 6. Success!
+        entry["run_success"] = run_success
+        entry["run_output"] = history_lines(run_output)
+        entry["timed_out"] = False
+        entry["attempt_result"] = "success"
+        flush_history()
         snapshot_dir = snapshot_successful_run(code_dir)
         print("\n=== SUCCESS! The agent wrote working ARM code! ===")
         print("Final Output:\n", run_output)
