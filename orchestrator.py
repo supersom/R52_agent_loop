@@ -155,11 +155,34 @@ def build_patch_retry_prompt(current_source: str, issue_text: str) -> str:
         "```\n"
     )
 
-def sanitize_unified_diff_patch_text(patch_text: str) -> str:
+def sanitize_unified_diff_patch_text(patch_text: str, original_text: str | None = None) -> str:
     """
     Keep only the unified diff portion of a patch response and drop trailing
     non-diff noise (for example, leaked tool logs on stdout).
+    Also tolerate an EOF newline mismatch when the current source has no trailing
+    newline but the retained patch context line does (common when we truncate
+    leaked stdout after an otherwise valid patch).
     """
+    def normalize_eof_newline_mismatch(sanitized_patch: str) -> str:
+        if original_text is None or original_text.endswith("\n"):
+            return sanitized_patch
+        if "\\ No newline at end of file" in sanitized_patch:
+            return sanitized_patch
+
+        lines = sanitized_patch.splitlines(keepends=True)
+        if not lines:
+            return sanitized_patch
+
+        for idx in range(len(lines) - 1, -1, -1):
+            line = lines[idx]
+            if line.startswith("@@"):
+                break
+            if line.startswith((" ", "+", "-")) and line.endswith("\n"):
+                lines[idx] = line[:-1]
+                return "".join(lines)
+
+        return sanitized_patch
+
     patch_lines = patch_text.splitlines(keepends=True)
     first_hunk_idx = next((i for i, line in enumerate(patch_lines) if line.startswith("@@")), None)
     if first_hunk_idx is None:
@@ -180,12 +203,12 @@ def sanitize_unified_diff_patch_text(patch_text: str) -> str:
                     sanitized_end = i + 1
                     i += 1
                     continue
-                return "".join(patch_lines[:sanitized_end])
+                return normalize_eof_newline_mismatch("".join(patch_lines[:sanitized_end]))
             continue
         i += 1
 
     if sanitized_end > first_hunk_idx:
-        return "".join(patch_lines[:sanitized_end])
+        return normalize_eof_newline_mismatch("".join(patch_lines[:sanitized_end]))
     return patch_text
 
 def apply_unified_diff_patch(original_text: str, patch_text: str) -> str:
