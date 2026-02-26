@@ -123,6 +123,8 @@ def build_task_contract_prompt(
         f"- Board: {board_name}\n"
         f"- UART data register address is FIXED for this run: {uart_addr}\n"
         "- Do NOT try alternate UART addresses unless the user explicitly asks.\n"
+        "- To print on the ARM FVP, write the string byte-by-byte to the UART0 data register.\n"
+        "- Also use semihosting to print to the console to ensure visibility in simulation logs.\n"
         f"- Expected output requirement remains: the simulator output must contain '{expected_output}'\n"
         "- Compute the result in code; do not hardcode the result string verbatim.\n"
         "- The original task statement below remains in force for all attempts.\n\n"
