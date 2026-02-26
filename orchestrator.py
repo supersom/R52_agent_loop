@@ -155,6 +155,39 @@ def build_patch_retry_prompt(current_source: str, issue_text: str) -> str:
         "```\n"
     )
 
+def sanitize_unified_diff_patch_text(patch_text: str) -> str:
+    """
+    Keep only the unified diff portion of a patch response and drop trailing
+    non-diff noise (for example, leaked tool logs on stdout).
+    """
+    patch_lines = patch_text.splitlines(keepends=True)
+    first_hunk_idx = next((i for i, line in enumerate(patch_lines) if line.startswith("@@")), None)
+    if first_hunk_idx is None:
+        return patch_text
+
+    sanitized_end = first_hunk_idx
+    i = first_hunk_idx
+    while i < len(patch_lines):
+        line = patch_lines[i]
+        if line.startswith("@@"):
+            sanitized_end = i + 1
+            i += 1
+            while i < len(patch_lines):
+                hunk_line = patch_lines[i]
+                if hunk_line.startswith("@@"):
+                    break
+                if hunk_line.startswith((" ", "+", "-", "\\ No newline at end of file")):
+                    sanitized_end = i + 1
+                    i += 1
+                    continue
+                return "".join(patch_lines[:sanitized_end])
+            continue
+        i += 1
+
+    if sanitized_end > first_hunk_idx:
+        return "".join(patch_lines[:sanitized_end])
+    return patch_text
+
 def apply_unified_diff_patch(original_text: str, patch_text: str) -> str:
     """
     Apply a single-file unified diff patch to text and return the patched result.
