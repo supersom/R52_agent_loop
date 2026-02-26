@@ -236,6 +236,50 @@ def sanitize_full_source_text(source_text: str) -> str:
 
     return "".join(lines) if removed_any else source_text
 
+def extract_arm_asm_block(source_text: str) -> tuple[str, str | None]:
+    """
+    Trim leading non-assembly chatter before the first likely assembly block.
+    Returns (trimmed_text, note_if_trimmed).
+    """
+    lines = source_text.splitlines(keepends=True)
+    if not lines:
+        return source_text, None
+
+    directive_re = re.compile(r"^\s*\.[A-Za-z_][\w.]*\b")
+    label_only_re = re.compile(r"^\s*(?:[A-Za-z_.$][\w.$]*|\d+):\s*(?:[@;].*)?$")
+    label_prefix_re = re.compile(r"^\s*(?:[A-Za-z_.$][\w.$]*|\d+):\s*(.*)$")
+    instr_re = re.compile(r"^\s*[A-Za-z][A-Za-z0-9_.]*\b(?:\s+.*)?$")
+
+    def looks_asm_line(raw: str) -> bool:
+        stripped = raw.strip()
+        if not stripped:
+            return False
+        if stripped.startswith(("@", ";", "//", "/*", "*", "*/")):
+            return True
+        if directive_re.match(raw) or label_only_re.match(raw):
+            return True
+        label_prefix = label_prefix_re.match(raw)
+        if label_prefix:
+            tail = label_prefix.group(1).strip()
+            if not tail:
+                return True
+            if tail.startswith(("@", ";", "//", "/*", "*", "*/")):
+                return True
+            return bool(directive_re.match(tail) or instr_re.match(tail))
+        return bool(instr_re.match(raw))
+
+    for i in range(len(lines)):
+        if not looks_asm_line(lines[i]):
+            continue
+        window = lines[i:min(i + 8, len(lines))]
+        asm_count = sum(1 for line in window if looks_asm_line(line))
+        if asm_count >= 3:
+            if i == 0:
+                return source_text, None
+            return "".join(lines[i:]), f"Trimmed {i} leading non-assembly line(s)"
+
+    return source_text, None
+
 def validate_arm_asm_source_text(source_text: str) -> str | None:
     """
     Return an error string if the text contains obvious non-assembly/prose content.
@@ -767,7 +811,10 @@ def main():
             sanitized_full_source = sanitize_full_source_text(llm_response)
             if sanitized_full_source != llm_response:
                 print("[Loop] Stripped trailing non-code output from full-source response before writing.")
-            generated_code = sanitized_full_source
+            extracted_source, extraction_note = extract_arm_asm_block(sanitized_full_source)
+            if extraction_note:
+                print(f"[Loop] {extraction_note} from full-source response before validation.")
+            generated_code = extracted_source
 
         source_validation_error = validate_arm_asm_source_text(generated_code)
         if source_validation_error:
