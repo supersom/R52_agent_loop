@@ -236,6 +236,65 @@ def sanitize_full_source_text(source_text: str) -> str:
 
     return "".join(lines) if removed_any else source_text
 
+def validate_arm_asm_source_text(source_text: str) -> str | None:
+    """
+    Return an error string if the text contains obvious non-assembly/prose content.
+    This is a conservative fail-closed guard before writing agent_code.s.
+    """
+    directive_re = re.compile(r"^\s*\.[A-Za-z_][\w.]*\b")
+    label_re = re.compile(r"^\s*[A-Za-z_.$][\w.$]*:\s*(?:[@;].*)?$")
+    preproc_re = re.compile(r"^\s*#(?:include|define|if|ifdef|ifndef|elif|else|endif|pragma|error|warning)\b")
+    instr_re = re.compile(r"^\s*[A-Za-z][A-Za-z0-9_.]*\b(?:\s+.*)?$")
+
+    reject_prefixes = (
+        "ClearcutLogger:",
+        "Info:",
+        "Warning:",
+        "Error:",
+        "I will ",
+        "I'll ",
+        "Let me ",
+        "Here is ",
+        "```",
+        "# ",
+        "##",
+    )
+
+    saw_asm_like = False
+    for lineno, raw_line in enumerate(source_text.splitlines(), 1):
+        line = raw_line.rstrip("\r")
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if any(stripped.startswith(prefix) for prefix in reject_prefixes):
+            return f"Line {lineno} looks like prose/log output, not assembly: {stripped}"
+
+        if "`" in stripped:
+            return f"Line {lineno} contains markdown/backticks, not assembly: {stripped}"
+
+        if stripped.startswith(("@", ";", "//", "/*", "*", "*/")):
+            continue
+
+        if preproc_re.match(line) or directive_re.match(line) or label_re.match(line):
+            saw_asm_like = True
+            continue
+
+        # Allow mnemonics, macro invocations, and assembler pseudo-ops without leading dot.
+        if instr_re.match(line):
+            # Common prose signatures that still match the generic instruction regex.
+            token = stripped.split(None, 1)[0].lower()
+            if token in {"i", "here", "please", "note", "first", "then"}:
+                return f"Line {lineno} looks like prose, not assembly: {stripped}"
+            saw_asm_like = True
+            continue
+
+        return f"Line {lineno} is not recognized as ARM assembly syntax: {stripped}"
+
+    if not saw_asm_like:
+        return "No assembly-like directives, labels, or instructions found in generated source"
+    return None
+
 def apply_unified_diff_patch(original_text: str, patch_text: str) -> str:
     """
     Apply a single-file unified diff patch to text and return the patched result.
@@ -694,6 +753,40 @@ def main():
             if sanitized_full_source != llm_response:
                 print("[Loop] Stripped trailing non-code output from full-source response before writing.")
             generated_code = sanitized_full_source
+
+        source_validation_error = validate_arm_asm_source_text(generated_code)
+        if source_validation_error:
+            print(f"[Loop] Rejected non-assembly response before writing source: {source_validation_error}")
+            history.append({
+                "attempt": attempt,
+                "prompt": current_prompt,
+                "response_mode": response_mode,
+                "generated_code": generated_code.splitlines(),
+                "diff": [],
+                "patch_apply_success": True if response_mode == "patch" else None,
+                "patch_apply_error": None,
+                "patch_output_sanitized": patch_output_sanitized if response_mode == "patch" else None,
+                "compile_success": None,
+                "compile_error": [f"Source validation failed: {source_validation_error}"],
+                "run_success": None,
+                "run_output": None,
+                "timed_out": None,
+                "attempt_result": "source_validation_failed",
+            })
+            flush_history()
+
+            validation_issue = (
+                "Your previous response contained non-assembly text and was rejected before writing `agent_code.s`.\n"
+                f"Validation error: {source_validation_error}\n\n"
+                "Return ONLY valid ARM assembly source for `agent_code.s` (no prose, no markdown, no logs).\n"
+            )
+            if response_mode == "patch":
+                current_prompt = build_patch_retry_prompt(current_source, validation_issue)
+                response_mode = "patch"
+            else:
+                current_prompt = validation_issue
+                response_mode = "full_source"
+            continue
         
         # Compute diff
         diff = list(difflib.unified_diff(
