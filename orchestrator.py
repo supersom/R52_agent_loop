@@ -577,6 +577,7 @@ def main():
     current_prompt = initial_prompt
     response_mode = "full_source"
     timeout_sec = 2
+    last_attempt_feedback = ""
     
     history = []
     current_source = ""
@@ -600,8 +601,14 @@ def main():
                     current_source,
                     (
                         "Your previous response could not be applied as a unified diff patch.\n"
-                        f"Patch apply error: {e}\n\n"
-                        "Return a valid unified diff patch against the current `agent_code.s`."
+                        + f"Patch apply error: {e}\n"
+                        + (
+                            "\nMost recent compile/runtime feedback from the previous attempt "
+                            "(use this to fix the patch, not just the formatting):\n"
+                            f"{last_attempt_feedback}\n\n"
+                            if last_attempt_feedback else "\n"
+                        )
+                        + "Return a valid unified diff patch against the current `agent_code.s`."
                     )
                 )
                 response_mode = "patch"
@@ -641,6 +648,10 @@ def main():
         
         if not compile_success:
             print(f"[Loop] Compilation failed. Feeding error back to agent...")
+            last_attempt_feedback = (
+                "Compilation failed with this error output:\n"
+                f"{compile_error}"
+            )
             current_prompt = build_patch_retry_prompt(
                 current_source,
                 (
@@ -673,6 +684,10 @@ def main():
                 
         if timed_out:
             print(f"[Loop] Code consistently timed out. Feeding back to agent...")
+            last_attempt_feedback = (
+                f"Simulator output before timeout in {board_name}:\n"
+                f"{run_output}"
+            )
             current_prompt = build_patch_retry_prompt(
                 current_source,
                 (
@@ -687,6 +702,10 @@ def main():
         # 5. Check strictly for the expected unique string to avoid FVP boot log false positives
         if not run_success or args.expected not in run_output:
             print(f"[Loop] Runtime failed or output was incorrect. Output:\n{run_output}")
+            last_attempt_feedback = (
+                "Runtime completed but expected output was not found. Full simulator output:\n"
+                f"{run_output}"
+            )
             current_prompt = build_patch_retry_prompt(
                 current_source,
                 (
