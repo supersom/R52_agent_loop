@@ -510,9 +510,10 @@ def main():
     parser.add_argument("--source", type=str, help="Path to an existing folder of code to start with.", default=None)
     parser.add_argument("--prompt", type=str, help="Path to a custom prompt file in the prompts/ folder.", default="prompts/prime_sum.txt")
     parser.add_argument("--expected", type=str, help="Expected output string from the simulator.", default="SUM: 129")
+    parser.add_argument("--incremental", action="store_true", help="Use incremental patch retries (unified diff) instead of full-source retries")
     args = parser.parse_args()
 
-    print(f"=== Starting Agentic ARM Development Loop (Toolchain: {args.toolchain}) ===")
+    print(f"=== Starting Agentic ARM Development Loop (Toolchain: {args.toolchain}, Incremental: {args.incremental}) ===")
     
     # We tweak the prompt slightly based on the toolchain/board
     uart_addr = "0x101F1000" if args.toolchain == "gcc" else "0x9C090000" # FVP BaseR UART0 is typically at 0x9C090000
@@ -712,15 +713,23 @@ def main():
                 "Compilation failed with this error output:\n"
                 f"{compile_error}"
             )
-            current_prompt = build_patch_retry_prompt(
-                current_source,
-                (
+            if args.incremental:
+                current_prompt = build_patch_retry_prompt(
+                    current_source,
+                    (
+                        "Your previous code failed to compile with the following error:\n"
+                        f"{compile_error}\n\n"
+                        "Please fix the code."
+                    )
+                )
+                response_mode = "patch"
+            else:
+                current_prompt = (
                     "Your previous code failed to compile with the following error:\n"
                     f"{compile_error}\n\n"
-                    "Please fix the code."
+                    "Please fix the code and return ONLY the corrected assembly/C code."
                 )
-            )
-            response_mode = "patch"
+                response_mode = "full_source"
             continue # Try again!
             
         # 4. If it compiled, try to run it in the simulator
@@ -753,15 +762,24 @@ def main():
                 f"Simulator output before timeout in {board_name}:\n"
                 f"{run_output}"
             )
-            current_prompt = build_patch_retry_prompt(
-                current_source,
-                (
+            if args.incremental:
+                current_prompt = build_patch_retry_prompt(
+                    current_source,
+                    (
+                        f"The code compiled successfully, but running it in {board_name} timed out after multiple attempts.\n"
+                        f"Output before timeout:\n{run_output}\n\n"
+                        "Ensure you are not stuck in an infinite loop before printing the required output. Please fix the logic."
+                    )
+                )
+                response_mode = "patch"
+            else:
+                current_prompt = (
                     f"The code compiled successfully, but running it in {board_name} timed out after multiple attempts.\n"
                     f"Output before timeout:\n{run_output}\n\n"
-                    "Ensure you are not stuck in an infinite loop before printing the required output. Please fix the logic."
+                    "Ensure you are not stuck in an infinite loop before printing the required output. "
+                    "Please fix the logic and try again. Return ONLY the corrected assembly/C code."
                 )
-            )
-            response_mode = "patch"
+                response_mode = "full_source"
             continue
         
         # 5. Check strictly for the expected unique string to avoid FVP boot log false positives
@@ -776,15 +794,24 @@ def main():
                 "Runtime completed but expected output was not found. Full simulator output:\n"
                 f"{run_output}"
             )
-            current_prompt = build_patch_retry_prompt(
-                current_source,
-                (
+            if args.incremental:
+                current_prompt = build_patch_retry_prompt(
+                    current_source,
+                    (
+                        "The code compiled successfully and completed, but the expected output was not found.\n"
+                        f"Output:\n{run_output}\n\n"
+                        f"We expect the exact string '{args.expected}' to be printed to the UART. Please fix the logic."
+                    )
+                )
+                response_mode = "patch"
+            else:
+                current_prompt = (
                     "The code compiled successfully and completed, but the expected output was not found.\n"
                     f"Output:\n{run_output}\n\n"
-                    f"We expect the exact string '{args.expected}' to be printed to the UART. Please fix the logic."
+                    f"We expect the exact string '{args.expected}' to be printed to the UART. "
+                    "Please fix the logic and return ONLY the corrected assembly/C code."
                 )
-            )
-            response_mode = "patch"
+                response_mode = "full_source"
             continue
             
         # 6. Success!
