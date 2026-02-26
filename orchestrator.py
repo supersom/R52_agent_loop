@@ -100,7 +100,7 @@ def build_llm_system_prompt(code_dir: str) -> str:
         "Treat files outside that folder as read-only context.\n"
         "Do not hardcode the full expected output string verbatim if it contains the result.\n"
         "Compute the requested result in code and construct/emit the output from that computed value.\n"
-        "Return only the requested source code content.\n"
+        "Return only the requested output content (source code or unified diff patch).\n"
     )
 
 def call_llm(input_prompt: str, code_dir: str) -> str:
