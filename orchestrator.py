@@ -242,7 +242,8 @@ def validate_arm_asm_source_text(source_text: str) -> str | None:
     This is a conservative fail-closed guard before writing agent_code.s.
     """
     directive_re = re.compile(r"^\s*\.[A-Za-z_][\w.]*\b")
-    label_re = re.compile(r"^\s*[A-Za-z_.$][\w.$]*:\s*(?:[@;].*)?$")
+    label_only_re = re.compile(r"^\s*(?:[A-Za-z_.$][\w.$]*|\d+):\s*(?:[@;].*)?$")
+    label_prefix_re = re.compile(r"^\s*(?:[A-Za-z_.$][\w.$]*|\d+):\s*(.*)$")
     preproc_re = re.compile(r"^\s*#(?:include|define|if|ifdef|ifndef|elif|else|endif|pragma|error|warning)\b")
     instr_re = re.compile(r"^\s*[A-Za-z][A-Za-z0-9_.]*\b(?:\s+.*)?$")
 
@@ -276,9 +277,23 @@ def validate_arm_asm_source_text(source_text: str) -> str | None:
         if stripped.startswith(("@", ";", "//", "/*", "*", "*/")):
             continue
 
-        if preproc_re.match(line) or directive_re.match(line) or label_re.match(line):
+        if preproc_re.match(line) or directive_re.match(line) or label_only_re.match(line):
             saw_asm_like = True
             continue
+
+        label_prefix = label_prefix_re.match(line)
+        if label_prefix:
+            tail = label_prefix.group(1).strip()
+            if not tail:
+                saw_asm_like = True
+                continue
+            if tail.startswith(("@", ";", "//", "/*", "*", "*/")):
+                saw_asm_like = True
+                continue
+            if preproc_re.match(tail) or directive_re.match(tail) or instr_re.match(tail):
+                saw_asm_like = True
+                continue
+            return f"Line {lineno} has a valid label but invalid code after ':': {tail}"
 
         # Allow mnemonics, macro invocations, and assembler pseudo-ops without leading dot.
         if instr_re.match(line):
