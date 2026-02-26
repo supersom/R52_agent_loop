@@ -597,21 +597,37 @@ def main():
                 generated_code = apply_unified_diff_patch(current_source, llm_response)
             except ValueError as e:
                 print(f"[Loop] Could not apply patch response: {e}")
-                current_prompt = build_patch_retry_prompt(
-                    current_source,
-                    (
-                        "Your previous response could not be applied as a unified diff patch.\n"
-                        + f"Patch apply error: {e}\n"
-                        + (
-                            "\nMost recent compile/runtime feedback from the previous attempt "
-                            "(use this to fix the patch, not just the formatting):\n"
-                            f"{last_attempt_feedback}\n\n"
-                            if last_attempt_feedback else "\n"
-                        )
-                        + "Return a valid unified diff patch against the current `agent_code.s`."
+                patch_apply_issue = (
+                    "Your previous response could not be applied as a unified diff patch.\n"
+                    + f"Patch apply error: {e}\n"
+                    + (
+                        "\nMost recent compile/runtime feedback from the previous attempt "
+                        "(use this to fix the patch, not just the formatting):\n"
+                        f"{last_attempt_feedback}\n\n"
+                        if last_attempt_feedback else "\n"
                     )
                 )
-                response_mode = "patch"
+                if "Patch context does not match current source" in str(e):
+                    print("[Loop] Switching next retry to full source mode due to patch context mismatch.")
+                    current_prompt = (
+                        f"{patch_apply_issue}"
+                        "Your patch content may be directionally correct, but the unified diff context did not "
+                        "match the current file exactly.\n\n"
+                        "For the next retry, do NOT return a patch.\n"
+                        "Return ONLY a full replacement for `agent_code.s` (no prose, no markdown).\n"
+                        "Make the smallest logical fix needed while preserving the working parts.\n\n"
+                        "Current `agent_code.s`:\n"
+                        "```assembly\n"
+                        f"{current_source}\n"
+                        "```\n"
+                    )
+                    response_mode = "full_source"
+                else:
+                    current_prompt = build_patch_retry_prompt(
+                        current_source,
+                        patch_apply_issue + "Return a valid unified diff patch against the current `agent_code.s`."
+                    )
+                    response_mode = "patch"
                 continue
         else:
             generated_code = llm_response
