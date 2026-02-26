@@ -103,11 +103,41 @@ def build_llm_system_prompt(code_dir: str) -> str:
         "Return only the requested output content (source code or unified diff patch).\n"
     )
 
-def call_llm(input_prompt: str, code_dir: str) -> str:
+def build_task_contract_prompt(
+    prompt_name: str,
+    toolchain: str,
+    board_name: str,
+    uart_addr: str,
+    expected_output: str,
+    formatted_prompt: str,
+) -> str:
+    """
+    Compact task contract that is prepended on every attempt so retries do not
+    lose critical constraints from the initial task prompt.
+    """
+    return (
+        "TASK CONTRACT (applies to every attempt, including retries):\n"
+        f"- Prompt template: {prompt_name}\n"
+        f"- Toolchain: {toolchain}\n"
+        f"- Board: {board_name}\n"
+        f"- UART data register address is FIXED for this run: {uart_addr}\n"
+        "- Do NOT try alternate UART addresses unless the user explicitly asks.\n"
+        f"- Expected output requirement remains: the simulator output must contain '{expected_output}'\n"
+        "- Compute the result in code; do not hardcode the result string verbatim.\n"
+        "- The original task statement below remains in force for all attempts.\n\n"
+        "Original task statement:\n"
+        f"{formatted_prompt}\n"
+    )
+
+def call_llm(input_prompt: str, code_dir: str, task_contract_prompt: str = "") -> str:
     """
     Calls the local `gemini` CLI to generate the code.
     """
-    prompt = f"{build_llm_system_prompt(code_dir)}\n{input_prompt}"
+    prompt_parts = [build_llm_system_prompt(code_dir)]
+    if task_contract_prompt:
+        prompt_parts.append(task_contract_prompt)
+    prompt_parts.append(input_prompt)
+    prompt = "\n".join(prompt_parts)
     print(f"\n[LLM] Generating code... (Prompt length: {len(prompt)})")
     print(f"[LLM] --- Prompt Sent ---\n{prompt}\n-----------------------")
     
@@ -125,7 +155,7 @@ def call_llm(input_prompt: str, code_dir: str) -> str:
         with open(debug_log_path, "a") as debug_file:
             debug_file.write(f"\n\n--- New Prompt Execution (Length: {len(prompt)}) ---\n")
             use_stdin_prompt = len(prompt) > 8000
-            gemini_cmd = ["gemini", "-y", "-d"] if use_stdin_prompt else ["gemini", "-y", "-d", prompt]
+            gemini_cmd = ["gemini", "-d"] if use_stdin_prompt else ["gemini", "-d", prompt]
             process = subprocess.Popen(
                 gemini_cmd, # Enable debug logs
                 stdin=subprocess.PIPE if use_stdin_prompt else None,
@@ -336,9 +366,16 @@ def main():
         board_name=board_name,
         expected_output=args.expected
     )
+    task_contract_prompt = build_task_contract_prompt(
+        prompt_name=os.path.basename(prompt_path),
+        toolchain=args.toolchain,
+        board_name=board_name,
+        uart_addr=uart_addr,
+        expected_output=args.expected,
+        formatted_prompt=formatted_prompt,
+    )
 
     initial_prompt = (
-        f"{formatted_prompt}\n"
         f"CRITICAL: If an incremental feature is requested and there is existing code that met requirements prior to this incremental feature request, try to change that existing code as little as possible while implementing this feature. If you would like to improve on something that existed, jot that down in a comments and allow the developer to decide. "
         f"CRITICAL: If you start off with non-empty code, first check if that meets requirements before attempting to modify. You might not have to run this through an iteration of write-build-run - the requirements might be so different from the existing code that it is obvious that it has to be rewritten."
         f"{existing_code_context}"
@@ -354,7 +391,7 @@ def main():
         print(f"\n--- Attempt {attempt}/{MAX_RETRIES} ---")
         
         # 1. Ask the Agent to write/fix the code
-        generated_code = call_llm(current_prompt, code_dir)
+        generated_code = call_llm(current_prompt, code_dir, task_contract_prompt)
         
         # Compute diff
         diff = list(difflib.unified_diff(
