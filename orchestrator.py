@@ -211,6 +211,29 @@ def sanitize_unified_diff_patch_text(patch_text: str, original_text: str | None 
         return normalize_eof_newline_mismatch("".join(patch_lines[:sanitized_end]))
     return patch_text
 
+def sanitize_full_source_text(source_text: str) -> str:
+    """
+    Strip known leaked CLI/debug log lines from the end of a full-source response.
+    Keep this conservative so we do not remove legitimate code.
+    """
+    noise_prefixes = (
+        "ClearcutLogger:",
+    )
+    lines = source_text.splitlines(keepends=True)
+    if not lines:
+        return source_text
+
+    removed_any = False
+    while lines:
+        line = lines[-1]
+        if any(line.startswith(prefix) for prefix in noise_prefixes):
+            lines.pop()
+            removed_any = True
+            continue
+        break
+
+    return "".join(lines) if removed_any else source_text
+
 def apply_unified_diff_patch(original_text: str, patch_text: str) -> str:
     """
     Apply a single-file unified diff patch to text and return the patched result.
@@ -661,7 +684,10 @@ def main():
                     response_mode = "patch"
                 continue
         else:
-            generated_code = llm_response
+            sanitized_full_source = sanitize_full_source_text(llm_response)
+            if sanitized_full_source != llm_response:
+                print("[Loop] Stripped trailing non-code output from full-source response before writing.")
+            generated_code = sanitized_full_source
         
         # Compute diff
         diff = list(difflib.unified_diff(
