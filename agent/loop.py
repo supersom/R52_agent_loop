@@ -5,7 +5,18 @@ from agent.history import RunHistory
 from agent.llm_client import call_llm
 from agent.models import LoopConfig
 from agent.patching import apply_unified_diff_patch
-from agent.prompting import build_patch_retry_prompt
+from agent.prompting import (
+    build_compile_failure_full_source_prompt,
+    build_compile_failure_patch_issue,
+    build_output_mismatch_full_source_prompt,
+    build_output_mismatch_patch_issue,
+    build_patch_apply_issue_prompt,
+    build_patch_context_mismatch_full_source_prompt,
+    build_patch_retry_prompt,
+    build_source_validation_issue_prompt,
+    build_timeout_full_source_prompt,
+    build_timeout_patch_issue,
+)
 from agent.response_filters import (
     extract_arm_asm_block,
     sanitize_full_source_text,
@@ -63,30 +74,12 @@ def run_agent_loop(config: LoopConfig) -> None:
                     }
                 )
                 run_history.flush()
-                patch_apply_issue = (
-                    "Your previous response could not be applied as a unified diff patch.\n"
-                    + f"Patch apply error: {e}\n"
-                    + (
-                        "\nMost recent compile/runtime feedback from the previous attempt "
-                        "(use this to fix the patch, not just the formatting):\n"
-                        f"{last_attempt_feedback}\n\n"
-                        if last_attempt_feedback
-                        else "\n"
-                    )
-                )
+                patch_apply_issue = build_patch_apply_issue_prompt(str(e), last_attempt_feedback)
                 if "Patch context does not match current source" in str(e):
                     print("[Loop] Switching next retry to full source mode due to patch context mismatch.")
-                    current_prompt = (
-                        f"{patch_apply_issue}"
-                        "Your patch content may be directionally correct, but the unified diff context did not "
-                        "match the current file exactly.\n\n"
-                        "For the next retry, do NOT return a patch.\n"
-                        "Return ONLY a full replacement for `agent_code.s` (no prose, no markdown).\n"
-                        "Make the smallest logical fix needed while preserving the working parts.\n\n"
-                        "Current `agent_code.s`:\n"
-                        "```assembly\n"
-                        f"{current_source}\n"
-                        "```\n"
+                    current_prompt = build_patch_context_mismatch_full_source_prompt(
+                        current_source,
+                        patch_apply_issue,
                     )
                     response_mode = "full_source"
                 else:
@@ -128,11 +121,7 @@ def run_agent_loop(config: LoopConfig) -> None:
             )
             run_history.flush()
 
-            validation_issue = (
-                "Your previous response contained non-assembly text and was rejected before writing `agent_code.s`.\n"
-                f"Validation error: {source_validation_error}\n\n"
-                "Return ONLY valid ARM assembly source for `agent_code.s` (no prose, no markdown, no logs).\n"
-            )
+            validation_issue = build_source_validation_issue_prompt(source_validation_error)
             if response_mode == "patch":
                 current_prompt = build_patch_retry_prompt(current_source, validation_issue)
                 response_mode = "patch"
@@ -200,19 +189,11 @@ def run_agent_loop(config: LoopConfig) -> None:
             if config.incremental:
                 current_prompt = build_patch_retry_prompt(
                     current_source,
-                    (
-                        "Your previous code failed to compile with the following error:\n"
-                        f"{compile_error}\n\n"
-                        "Please fix the code."
-                    ),
+                    build_compile_failure_patch_issue(compile_error),
                 )
                 response_mode = "patch"
             else:
-                current_prompt = (
-                    "Your previous code failed to compile with the following error:\n"
-                    f"{compile_error}\n\n"
-                    "Please fix the code and return ONLY the corrected assembly/C code."
-                )
+                current_prompt = build_compile_failure_full_source_prompt(compile_error)
                 response_mode = "full_source"
             continue
 
@@ -251,20 +232,11 @@ def run_agent_loop(config: LoopConfig) -> None:
             if config.incremental:
                 current_prompt = build_patch_retry_prompt(
                     current_source,
-                    (
-                        f"The code compiled successfully, but running it in {config.board_name} timed out after multiple attempts.\n"
-                        f"Output before timeout:\n{run_output}\n\n"
-                        "Ensure you are not stuck in an infinite loop before printing the required output. Please fix the logic."
-                    ),
+                    build_timeout_patch_issue(config.board_name, run_output),
                 )
                 response_mode = "patch"
             else:
-                current_prompt = (
-                    f"The code compiled successfully, but running it in {config.board_name} timed out after multiple attempts.\n"
-                    f"Output before timeout:\n{run_output}\n\n"
-                    "Ensure you are not stuck in an infinite loop before printing the required output. "
-                    "Please fix the logic and try again. Return ONLY the corrected assembly/C code."
-                )
+                current_prompt = build_timeout_full_source_prompt(config.board_name, run_output)
                 response_mode = "full_source"
             continue
 
@@ -282,20 +254,11 @@ def run_agent_loop(config: LoopConfig) -> None:
             if config.incremental:
                 current_prompt = build_patch_retry_prompt(
                     current_source,
-                    (
-                        "The code compiled successfully and completed, but the expected output was not found.\n"
-                        f"Output:\n{run_output}\n\n"
-                        f"We expect the exact string '{config.expected_output}' to be printed to the UART. Please fix the logic."
-                    ),
+                    build_output_mismatch_patch_issue(config.expected_output, run_output),
                 )
                 response_mode = "patch"
             else:
-                current_prompt = (
-                    "The code compiled successfully and completed, but the expected output was not found.\n"
-                    f"Output:\n{run_output}\n\n"
-                    f"We expect the exact string '{config.expected_output}' to be printed to the UART. "
-                    "Please fix the logic and return ONLY the corrected assembly/C code."
-                )
+                current_prompt = build_output_mismatch_full_source_prompt(config.expected_output, run_output)
                 response_mode = "full_source"
             continue
 
