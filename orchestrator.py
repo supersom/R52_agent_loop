@@ -2,14 +2,11 @@ import subprocess
 import os
 import sys
 import json
-import time
 import argparse
 import difflib
-import shutil
-from datetime import datetime
+from agent.llm_client import call_llm
 from agent.patching import apply_unified_diff_patch
 from agent.prompting import (
-    build_llm_system_prompt,
     build_patch_retry_prompt,
     build_task_contract_prompt,
 )
@@ -18,6 +15,18 @@ from agent.response_filters import (
     sanitize_full_source_text,
     sanitize_unified_diff_patch_text,
     validate_arm_asm_source_text,
+)
+from agent.toolchain import (
+    compile_code,
+    get_target_details,
+    load_toolchain_binaries_from_env,
+    run_in_simulator,
+)
+from agent.workspace import (
+    collect_existing_code_context,
+    get_prompt_run_dir,
+    load_dotenv,
+    snapshot_successful_run,
 )
 
 # You can use the `google-genai` package or direct API calls for the LLM part later.
@@ -28,239 +37,9 @@ WORKSPACE = os.path.dirname(os.path.abspath(__file__))
 CODE_ROOT = os.path.join(WORKSPACE, "code")
 GENERATED_SOURCE_NAME = "agent_code.s"
 GENERATED_ELF_NAME = "agent_code.elf"
-GENERATED_OBJ_NAME = "agent_code.o"
-
-def load_dotenv(dotenv_path: str) -> None:
-    """
-    Load simple KEY=VALUE pairs from a .env file into os.environ.
-    Existing environment variables are preserved.
-    """
-    if not os.path.exists(dotenv_path):
-        return
-
-    try:
-        with open(dotenv_path, "r") as f:
-            for raw_line in f:
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-
-                if not key:
-                    continue
-
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-                    value = value[1:-1]
-
-                os.environ.setdefault(key, value)
-    except OSError as e:
-        print(f"[Config] Warning: Could not read {dotenv_path}: {e}")
 
 load_dotenv(os.path.join(WORKSPACE, ".env"))
-
-# DS-5 / ARMCompiler6 paths
-ARMCLANG_BIN = os.environ.get(
-    "ARMCLANG_BIN",
-    "/opt/arm/developmentstudio-2025.0-1/sw/ARMCompiler6.24/bin/armclang"
-)
-ARMLINK_BIN = os.environ.get(
-    "ARMLINK_BIN",
-    "/opt/arm/developmentstudio-2025.0-1/sw/ARMCompiler6.24/bin/armlink"
-)
-FVP_BIN = os.environ.get(
-    "FVP_BIN",
-    "/opt/arm/developmentstudio-2025.0-1/bin/FVP_BaseR_Cortex-R52"
-)
-
-def get_prompt_run_dir(prompt_path: str) -> str:
-    """
-    Resolve the working output directory for a prompt file.
-    Example: prompts/prime_sum.txt -> ./code/prime_sum
-    """
-    prompt_name = os.path.splitext(os.path.basename(prompt_path))[0] # Strip extension for cleaner directories
-    return os.path.join(CODE_ROOT, prompt_name)
-
-def snapshot_successful_run(code_dir: str) -> str:
-    """
-    Copy top-level generated files from the active prompt directory into a timestamped snapshot.
-    """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    snapshot_dir = os.path.join(code_dir, timestamp)
-    os.makedirs(snapshot_dir, exist_ok=False)
-
-    for name in os.listdir(code_dir):
-        src_path = os.path.join(code_dir, name)
-        if os.path.isfile(src_path):
-            shutil.copy2(src_path, os.path.join(snapshot_dir, name))
-
-    return snapshot_dir
-
-def call_llm(input_prompt: str, code_dir: str, task_contract_prompt: str = "") -> str:
-    """
-    Calls the local `gemini` CLI to generate the code.
-    """
-    prompt_parts = [build_llm_system_prompt(code_dir)]
-    if task_contract_prompt:
-        prompt_parts.append(task_contract_prompt)
-    prompt_parts.append(input_prompt)
-    prompt = "\n".join(prompt_parts)
-    print(f"\n[LLM] Generating code... (Prompt length: {len(prompt)})")
-    print(f"[LLM] --- Prompt Sent ---\n{prompt}\n-----------------------")
-    
-    # We write the prompt to a temp file to avoid command-line length limits
-    prompt_file = os.path.join(code_dir, "current_prompt.txt")
-    with open(prompt_file, "w") as f:
-        f.write(prompt)
-        
-    try:
-        # We pass the prompt as the positional argument.
-        # We also pass -y to make it one-shot and --model to ensure it uses the right model.
-        print(f"[LLM] --- Streaming Response (Debug logs routed to {os.path.join(code_dir, 'llm_debug.log')}) ---")
-        debug_log_path = os.path.join(code_dir, "llm_debug.log")
-        
-        with open(debug_log_path, "a") as debug_file:
-            debug_file.write(f"\n\n--- New Prompt Execution (Length: {len(prompt)}) ---\n")
-            use_stdin_prompt = len(prompt) > 8000
-            gemini_cmd = ["gemini", "-d"] if use_stdin_prompt else ["gemini", "-d", prompt]
-            process = subprocess.Popen(
-                gemini_cmd, # Enable debug logs
-                stdin=subprocess.PIPE if use_stdin_prompt else None,
-                stdout=subprocess.PIPE,
-                stderr=debug_file, # Route stderr directly to the log file
-                text=True,
-                bufsize=1
-            )
-
-            if use_stdin_prompt and process.stdin is not None:
-                process.stdin.write(prompt)
-                process.stdin.close()
-            
-            response_lines = []
-            for line in iter(process.stdout.readline, ''):
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                response_lines.append(line)
-                
-            process.stdout.close()
-            process.wait()
-            
-        if process.returncode != 0:
-            print(f"[LLM] Error calling Gemini CLI. Check {debug_log_path} for details.")
-            return "    .global _start\n_start:\n    mov r0, #42\n"
-            
-        response = "".join(response_lines)
-        
-        # The LLM often wraps code in markdown blocks like ```assembly or ```c
-        # We should try to strip those out so the compiler doesn't choke.
-        lines = response.split('\n')
-        code_lines = []
-        in_code_block = False
-        
-        for line in lines:
-            if line.startswith('```'):
-                in_code_block = not in_code_block
-                continue
-            if in_code_block or not any(l.startswith('```') for l in lines):
-                code_lines.append(line)
-                
-        final_code = '\n'.join(code_lines)
-        print(f"[LLM] --- Code Received ---\n{final_code}\n---------------------------")
-        return final_code
-        
-    except subprocess.CalledProcessError as e:
-        print(f"[LLM] Error calling Gemini CLI: {e.stderr}")
-        return "    .global _start\n_start:\n    mov r0, #42\n"
-
-def compile_code(source_file, elf_file, toolchain, code_dir):
-    """
-    Compile the generated code.
-    Returns (success: bool, error_message: str)
-    """
-    print(f"\n[Compiler] Compiling {source_file} using {toolchain}...")
-    obj_file = os.path.join(code_dir, GENERATED_OBJ_NAME)
-    
-    if toolchain == "ds5":
-        # ARM Compiler 6 (armclang + armlink)
-        compile_cmd = [
-            ARMCLANG_BIN,
-            "--target=arm-arm-none-eabi",
-            "-mcpu=cortex-r52",
-            "-O0", "-c",
-            source_file,
-            "-o", obj_file
-        ]
-        link_cmd = [
-            ARMLINK_BIN,
-            "--ro-base=0x00000000",
-            "--entry=_start",
-            obj_file,
-            "-o", elf_file
-        ]
-        
-        try:
-            subprocess.run(compile_cmd, capture_output=True, text=True, check=True)
-            subprocess.run(link_cmd, capture_output=True, text=True, check=True)
-            print("[Compiler] Success!")
-            return True, ""
-        except subprocess.CalledProcessError as e:
-            print("[Compiler] Failed!")
-            return False, e.stderr
-
-    else:
-        # Default gcc
-        cmd = [
-            "arm-none-eabi-gcc",
-            "-O0", "-nostdlib",
-            "-T", os.path.join(WORKSPACE, "link.ld"),
-            source_file,
-            "-o", elf_file
-        ]
-        try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
-            print("[Compiler] Success!")
-            return True, ""
-        except subprocess.CalledProcessError as e:
-            print("[Compiler] Failed!")
-            return False, e.stderr
-
-def run_in_simulator(elf_file, toolchain, timeout_sec=5):
-    """
-    Run the compiled binary in the simulator (QEMU or FVP).
-    Returns (success: bool, output: str, timed_out: bool)
-    """
-    print(f"\n[Simulator] Running {elf_file} using {toolchain} (Timeout: {timeout_sec}s)...")
-    
-    if toolchain == "ds5":
-        # FVP
-        cmd = [
-            FVP_BIN,
-            "-C", "cluster0.NUM_CORES=1",
-            "--application", elf_file
-        ]
-    else:
-        # Default QEMU
-        cmd = [
-            "qemu-system-arm",
-            "-M", "versatilepb",
-            "-m", "128M",
-            "-nographic",
-            "-kernel", elf_file
-        ]
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
-        output = result.stdout + result.stderr
-        print("[Simulator] Finished Execution naturally.")
-        return True, output, False
-    except subprocess.TimeoutExpired as e:
-        output = str(e.stdout or "") + str(e.stderr or "")
-        print(f"[Simulator] Timeout! Execution exceeded {timeout_sec} seconds.")
-        return True, output, True
-    except Exception as e:
-        return False, str(e), False
+TOOLCHAIN_BINARIES = load_toolchain_binaries_from_env()
 
 def check_git_status(auto_yes: bool = False):
     """
@@ -295,27 +74,8 @@ def main():
 
     print(f"=== Starting Agentic ARM Development Loop (Toolchain: {args.toolchain}, Incremental: {args.incremental}) ===")
     
-    # We tweak the prompt slightly based on the toolchain/board
-    uart_addr = "0x101F1000" if args.toolchain == "gcc" else "0x9C090000" # FVP BaseR UART0 is typically at 0x9C090000
-    board_name = "QEMU versatilepb" if args.toolchain == "gcc" else "FVP Cortex-R52"
-    
-    # If a source directory is provided, read all relevant source files
-    existing_code_context = ""
-    if args.source and os.path.isdir(args.source):
-        print(f"--- Reading existing code from {args.source} ---")
-        for root, _, files in os.walk(args.source):
-            for file in files:
-                if file.endswith(('.c', '.h', '.s', '.S', '.ld', 'Makefile')):
-                    file_path = os.path.join(root, file)
-                    try:
-                        with open(file_path, 'r') as f:
-                            content = f.read()
-                            existing_code_context += f"\n\n--- File: {file_path} ---\n```\n{content}\n```\n"
-                    except Exception as e:
-                        print(f"Failed to read {file_path}: {e}")
-                        
-        if existing_code_context:
-            existing_code_context = "\n\n=== EXISTING CODEBASE ===\n" + existing_code_context + "\n=========================\n"
+    uart_addr, board_name = get_target_details(args.toolchain)
+    existing_code_context = collect_existing_code_context(args.source)
 
     # Read the prompt file
     prompt_path = os.path.join(WORKSPACE, args.prompt)
@@ -326,7 +86,7 @@ def main():
     with open(prompt_path, 'r') as f:
         base_prompt_text = f.read()
 
-    code_dir = get_prompt_run_dir(prompt_path)
+    code_dir = get_prompt_run_dir(CODE_ROOT, prompt_path)
     os.makedirs(code_dir, exist_ok=True)
     source_file = os.path.join(code_dir, GENERATED_SOURCE_NAME)
     elf_file = os.path.join(code_dir, GENERATED_ELF_NAME)
@@ -521,7 +281,14 @@ def main():
             f.write(generated_code)
             
         # 3. Try to compile it
-        compile_success, compile_error = compile_code(source_file, elf_file, args.toolchain, code_dir)
+        compile_success, compile_error = compile_code(
+            source_file=source_file,
+            elf_file=elf_file,
+            toolchain=args.toolchain,
+            code_dir=code_dir,
+            workspace=WORKSPACE,
+            binaries=TOOLCHAIN_BINARIES,
+        )
         entry["compile_success"] = compile_success
         entry["compile_error"] = history_lines(compile_error if compile_error else None)
         
@@ -560,7 +327,12 @@ def main():
         current_timeout = timeout_sec
         
         for sim_attempt in range(3):
-            success, output, t_out = run_in_simulator(elf_file, args.toolchain, current_timeout)
+            success, output, t_out = run_in_simulator(
+                elf_file=elf_file,
+                toolchain=args.toolchain,
+                binaries=TOOLCHAIN_BINARIES,
+                timeout_sec=current_timeout,
+            )
             run_output = output
             if not t_out:
                 run_success = success
