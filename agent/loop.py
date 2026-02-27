@@ -5,18 +5,7 @@ from agent.history import RunHistory
 from agent.llm_client import call_llm
 from agent.models import LoopConfig
 from agent.patching import apply_unified_diff_patch
-from agent.prompting import (
-    build_compile_failure_full_source_prompt,
-    build_compile_failure_patch_issue,
-    build_output_mismatch_full_source_prompt,
-    build_output_mismatch_patch_issue,
-    build_patch_apply_issue_prompt,
-    build_patch_context_mismatch_full_source_prompt,
-    build_patch_retry_prompt,
-    build_source_validation_issue_prompt,
-    build_timeout_full_source_prompt,
-    build_timeout_patch_issue,
-)
+from agent.retry_policy import decide_next_retry
 from agent.response_filters import (
     extract_arm_asm_block,
     sanitize_full_source_text,
@@ -74,20 +63,20 @@ def run_agent_loop(config: LoopConfig) -> None:
                     }
                 )
                 run_history.flush()
-                patch_apply_issue = build_patch_apply_issue_prompt(str(e), last_attempt_feedback)
-                if "Patch context does not match current source" in str(e):
-                    print("[Loop] Switching next retry to full source mode due to patch context mismatch.")
-                    current_prompt = build_patch_context_mismatch_full_source_prompt(
-                        current_source,
-                        patch_apply_issue,
-                    )
-                    response_mode = "full_source"
-                else:
-                    current_prompt = build_patch_retry_prompt(
-                        current_source,
-                        patch_apply_issue + "Return a valid unified diff patch against the current `agent_code.s`.",
-                    )
-                    response_mode = "patch"
+                retry_decision = decide_next_retry(
+                    outcome="patch_apply_failed",
+                    current_mode=response_mode,
+                    incremental=config.incremental,
+                    current_source=current_source,
+                    expected_output=config.expected_output,
+                    board_name=config.board_name,
+                    patch_apply_error=str(e),
+                    last_attempt_feedback=last_attempt_feedback,
+                )
+                if retry_decision.note:
+                    print(f"[Loop] {retry_decision.note}")
+                current_prompt = retry_decision.next_prompt
+                response_mode = retry_decision.next_mode
                 continue
         else:
             sanitized_full_source = sanitize_full_source_text(llm_response)
@@ -120,14 +109,17 @@ def run_agent_loop(config: LoopConfig) -> None:
                 }
             )
             run_history.flush()
-
-            validation_issue = build_source_validation_issue_prompt(source_validation_error)
-            if response_mode == "patch":
-                current_prompt = build_patch_retry_prompt(current_source, validation_issue)
-                response_mode = "patch"
-            else:
-                current_prompt = validation_issue
-                response_mode = "full_source"
+            retry_decision = decide_next_retry(
+                outcome="source_validation_failed",
+                current_mode=response_mode,
+                incremental=config.incremental,
+                current_source=current_source,
+                expected_output=config.expected_output,
+                board_name=config.board_name,
+                validation_error=source_validation_error,
+            )
+            current_prompt = retry_decision.next_prompt
+            response_mode = retry_decision.next_mode
             continue
 
         diff = list(
@@ -186,15 +178,17 @@ def run_agent_loop(config: LoopConfig) -> None:
                 "Compilation failed with this error output:\n"
                 f"{compile_error}"
             )
-            if config.incremental:
-                current_prompt = build_patch_retry_prompt(
-                    current_source,
-                    build_compile_failure_patch_issue(compile_error),
-                )
-                response_mode = "patch"
-            else:
-                current_prompt = build_compile_failure_full_source_prompt(compile_error)
-                response_mode = "full_source"
+            retry_decision = decide_next_retry(
+                outcome="compile_failed",
+                current_mode=response_mode,
+                incremental=config.incremental,
+                current_source=current_source,
+                expected_output=config.expected_output,
+                board_name=config.board_name,
+                compile_error=compile_error,
+            )
+            current_prompt = retry_decision.next_prompt
+            response_mode = retry_decision.next_mode
             continue
 
         run_success = False
@@ -229,15 +223,17 @@ def run_agent_loop(config: LoopConfig) -> None:
                 f"Simulator output before timeout in {config.board_name}:\n"
                 f"{run_output}"
             )
-            if config.incremental:
-                current_prompt = build_patch_retry_prompt(
-                    current_source,
-                    build_timeout_patch_issue(config.board_name, run_output),
-                )
-                response_mode = "patch"
-            else:
-                current_prompt = build_timeout_full_source_prompt(config.board_name, run_output)
-                response_mode = "full_source"
+            retry_decision = decide_next_retry(
+                outcome="run_timed_out",
+                current_mode=response_mode,
+                incremental=config.incremental,
+                current_source=current_source,
+                expected_output=config.expected_output,
+                board_name=config.board_name,
+                run_output=run_output,
+            )
+            current_prompt = retry_decision.next_prompt
+            response_mode = retry_decision.next_mode
             continue
 
         if not run_success or config.expected_output not in run_output:
@@ -251,15 +247,17 @@ def run_agent_loop(config: LoopConfig) -> None:
                 "Runtime completed but expected output was not found. Full simulator output:\n"
                 f"{run_output}"
             )
-            if config.incremental:
-                current_prompt = build_patch_retry_prompt(
-                    current_source,
-                    build_output_mismatch_patch_issue(config.expected_output, run_output),
-                )
-                response_mode = "patch"
-            else:
-                current_prompt = build_output_mismatch_full_source_prompt(config.expected_output, run_output)
-                response_mode = "full_source"
+            retry_decision = decide_next_retry(
+                outcome=entry["attempt_result"],
+                current_mode=response_mode,
+                incremental=config.incremental,
+                current_source=current_source,
+                expected_output=config.expected_output,
+                board_name=config.board_name,
+                run_output=run_output,
+            )
+            current_prompt = retry_decision.next_prompt
+            response_mode = retry_decision.next_mode
             continue
 
         entry["run_success"] = run_success
