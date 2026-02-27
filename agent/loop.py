@@ -3,6 +3,7 @@ import os
 
 from agent.history import RunHistory
 from agent.llm_client import call_llm
+from agent.models import LoopConfig
 from agent.patching import apply_unified_diff_patch
 from agent.prompting import build_patch_retry_prompt
 from agent.response_filters import (
@@ -11,42 +12,26 @@ from agent.response_filters import (
     sanitize_unified_diff_patch_text,
     validate_arm_asm_source_text,
 )
-from agent.toolchain import ToolchainBinaries, compile_code, run_in_simulator
+from agent.toolchain import compile_code, run_in_simulator
 from agent.workspace import snapshot_successful_run
 
 
-def run_agent_loop(
-    *,
-    toolchain: str,
-    incremental: bool,
-    expected_output: str,
-    board_name: str,
-    code_dir: str,
-    source_file: str,
-    elf_file: str,
-    history_file: str,
-    initial_prompt: str,
-    task_contract_prompt: str,
-    workspace: str,
-    toolchain_binaries: ToolchainBinaries,
-    max_retries: int,
-    timeout_sec: int = 2,
-) -> None:
-    current_prompt = initial_prompt
+def run_agent_loop(config: LoopConfig) -> None:
+    current_prompt = config.initial_prompt
     response_mode = "full_source"
     last_attempt_feedback = ""
-    run_history = RunHistory(history_file)
+    run_history = RunHistory(config.history_file)
 
     current_source = ""
-    if os.path.exists(source_file):
-        with open(source_file, "r") as f:
+    if os.path.exists(config.source_file):
+        with open(config.source_file, "r") as f:
             current_source = f.read()
-        print(f"[Info] Loaded existing working source from {source_file} for iterative updates")
+        print(f"[Info] Loaded existing working source from {config.source_file} for iterative updates")
 
-    for attempt in range(1, max_retries + 1):
-        print(f"\n--- Attempt {attempt}/{max_retries} ---")
+    for attempt in range(1, config.max_retries + 1):
+        print(f"\n--- Attempt {attempt}/{config.max_retries} ---")
 
-        llm_response = call_llm(current_prompt, code_dir, task_contract_prompt)
+        llm_response = call_llm(current_prompt, config.code_dir, config.task_contract_prompt)
         previous_code = current_source
         if response_mode == "patch":
             sanitized_patch = llm_response
@@ -190,16 +175,16 @@ def run_agent_loop(
 
         current_source = generated_code
 
-        with open(source_file, "w") as f:
+        with open(config.source_file, "w") as f:
             f.write(generated_code)
 
         compile_success, compile_error = compile_code(
-            source_file=source_file,
-            elf_file=elf_file,
-            toolchain=toolchain,
-            code_dir=code_dir,
-            workspace=workspace,
-            binaries=toolchain_binaries,
+            source_file=config.source_file,
+            elf_file=config.elf_file,
+            toolchain=config.toolchain,
+            code_dir=config.code_dir,
+            workspace=config.workspace,
+            binaries=config.toolchain_binaries,
         )
         entry["compile_success"] = compile_success
         entry["compile_error"] = RunHistory.lines(compile_error if compile_error else None)
@@ -212,7 +197,7 @@ def run_agent_loop(
                 "Compilation failed with this error output:\n"
                 f"{compile_error}"
             )
-            if incremental:
+            if config.incremental:
                 current_prompt = build_patch_retry_prompt(
                     current_source,
                     (
@@ -234,13 +219,13 @@ def run_agent_loop(
         run_success = False
         run_output = ""
         timed_out = False
-        current_timeout = timeout_sec
+        current_timeout = config.timeout_sec
 
         for _ in range(3):
             success, output, t_out = run_in_simulator(
-                elf_file=elf_file,
-                toolchain=toolchain,
-                binaries=toolchain_binaries,
+                elf_file=config.elf_file,
+                toolchain=config.toolchain,
+                binaries=config.toolchain_binaries,
                 timeout_sec=current_timeout,
             )
             run_output = output
@@ -260,14 +245,14 @@ def run_agent_loop(
             run_history.flush()
             print("[Loop] Code consistently timed out. Feeding back to agent...")
             last_attempt_feedback = (
-                f"Simulator output before timeout in {board_name}:\n"
+                f"Simulator output before timeout in {config.board_name}:\n"
                 f"{run_output}"
             )
-            if incremental:
+            if config.incremental:
                 current_prompt = build_patch_retry_prompt(
                     current_source,
                     (
-                        f"The code compiled successfully, but running it in {board_name} timed out after multiple attempts.\n"
+                        f"The code compiled successfully, but running it in {config.board_name} timed out after multiple attempts.\n"
                         f"Output before timeout:\n{run_output}\n\n"
                         "Ensure you are not stuck in an infinite loop before printing the required output. Please fix the logic."
                     ),
@@ -275,7 +260,7 @@ def run_agent_loop(
                 response_mode = "patch"
             else:
                 current_prompt = (
-                    f"The code compiled successfully, but running it in {board_name} timed out after multiple attempts.\n"
+                    f"The code compiled successfully, but running it in {config.board_name} timed out after multiple attempts.\n"
                     f"Output before timeout:\n{run_output}\n\n"
                     "Ensure you are not stuck in an infinite loop before printing the required output. "
                     "Please fix the logic and try again. Return ONLY the corrected assembly/C code."
@@ -283,7 +268,7 @@ def run_agent_loop(
                 response_mode = "full_source"
             continue
 
-        if not run_success or expected_output not in run_output:
+        if not run_success or config.expected_output not in run_output:
             entry["run_success"] = run_success
             entry["run_output"] = RunHistory.lines(run_output)
             entry["timed_out"] = False
@@ -294,13 +279,13 @@ def run_agent_loop(
                 "Runtime completed but expected output was not found. Full simulator output:\n"
                 f"{run_output}"
             )
-            if incremental:
+            if config.incremental:
                 current_prompt = build_patch_retry_prompt(
                     current_source,
                     (
                         "The code compiled successfully and completed, but the expected output was not found.\n"
                         f"Output:\n{run_output}\n\n"
-                        f"We expect the exact string '{expected_output}' to be printed to the UART. Please fix the logic."
+                        f"We expect the exact string '{config.expected_output}' to be printed to the UART. Please fix the logic."
                     ),
                 )
                 response_mode = "patch"
@@ -308,7 +293,7 @@ def run_agent_loop(
                 current_prompt = (
                     "The code compiled successfully and completed, but the expected output was not found.\n"
                     f"Output:\n{run_output}\n\n"
-                    f"We expect the exact string '{expected_output}' to be printed to the UART. "
+                    f"We expect the exact string '{config.expected_output}' to be printed to the UART. "
                     "Please fix the logic and return ONLY the corrected assembly/C code."
                 )
                 response_mode = "full_source"
@@ -319,12 +304,12 @@ def run_agent_loop(
         entry["timed_out"] = False
         entry["attempt_result"] = "success"
         run_history.flush()
-        snapshot_dir = snapshot_successful_run(code_dir)
+        snapshot_dir = snapshot_successful_run(config.code_dir)
         print("\n=== SUCCESS! The agent wrote working ARM code! ===")
         print("Final Output:\n", run_output)
         print(f"[Info] Snapshot saved to {snapshot_dir}")
         break
     else:
-        print(f"\n=== FAILED: Agent could not fix the code after {max_retries} attempts ===")
+        print(f"\n=== FAILED: Agent could not fix the code after {config.max_retries} attempts ===")
 
-    print(f"\n[Info] Final run history saved to {history_file}")
+    print(f"\n[Info] Final run history saved to {config.history_file}")

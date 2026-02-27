@@ -3,6 +3,7 @@ import os
 import sys
 import argparse
 from agent.loop import run_agent_loop
+from agent.models import LoopConfig
 from agent.prompting import (
     build_task_contract_prompt,
 )
@@ -101,7 +102,7 @@ def main():
         f"CRITICAL: If you start off with non-empty code, first check if that meets requirements before attempting to modify. You might not have to run this through an iteration of write-build-run - the requirements might be so different from the existing code that it is obvious that it has to be rewritten."
         f"{existing_code_context}"
     )
-    run_agent_loop(
+    loop_config = LoopConfig(
         toolchain=args.toolchain,
         incremental=args.incremental,
         expected_output=args.expected,
@@ -116,6 +117,7 @@ def main():
         toolchain_binaries=TOOLCHAIN_BINARIES,
         max_retries=MAX_RETRIES,
     )
+    run_agent_loop(loop_config)
 
 if __name__ == "__main__":
     main()
