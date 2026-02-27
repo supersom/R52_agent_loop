@@ -1,6 +1,13 @@
 import os
 from argparse import Namespace
 
+from agent.constants import (
+    CODE_ROOT,
+    GENERATED_ELF_NAME,
+    GENERATED_SOURCE_NAME,
+    MAX_RETRIES,
+    WORKSPACE,
+)
 from agent.models import LoopConfig
 from agent.prompting import build_task_contract_prompt
 from agent.toolchain import ToolchainBinaries, get_target_details
@@ -10,27 +17,22 @@ from agent.workspace import collect_existing_code_context, get_prompt_run_dir
 def build_loop_config(
     *,
     args: Namespace,
-    workspace: str,
-    code_root: str,
-    generated_source_name: str,
-    generated_elf_name: str,
-    max_retries: int,
     toolchain_binaries: ToolchainBinaries,
 ) -> LoopConfig:
     uart_addr, board_name = get_target_details(args.toolchain)
     existing_code_context = collect_existing_code_context(args.source)
 
-    prompt_path = os.path.join(workspace, args.prompt)
+    prompt_path = os.path.join(WORKSPACE, args.prompt)
     if not os.path.exists(prompt_path):
         raise FileNotFoundError(f"Error: Prompt file not found at {prompt_path}")
 
     with open(prompt_path, "r") as f:
         base_prompt_text = f.read()
 
-    code_dir = get_prompt_run_dir(code_root, prompt_path)
+    code_dir = get_prompt_run_dir(CODE_ROOT, prompt_path)
     os.makedirs(code_dir, exist_ok=True)
-    source_file = os.path.join(code_dir, generated_source_name)
-    elf_file = os.path.join(code_dir, generated_elf_name)
+    source_file = os.path.join(code_dir, GENERATED_SOURCE_NAME)
+    elf_file = os.path.join(code_dir, GENERATED_ELF_NAME)
     history_file = os.path.join(code_dir, "run_history.json")
 
     print(f"[Info] Prompt outputs will be written to {code_dir}")
@@ -66,7 +68,7 @@ def build_loop_config(
         history_file=history_file,
         initial_prompt=initial_prompt,
         task_contract_prompt=task_contract_prompt,
-        workspace=workspace,
+        workspace=WORKSPACE,
         toolchain_binaries=toolchain_binaries,
-        max_retries=max_retries,
+        max_retries=MAX_RETRIES,
     )

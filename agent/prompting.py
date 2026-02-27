@@ -1,6 +1,6 @@
 import os
 
-WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from agent.constants import WORKSPACE
 
 
 def build_llm_system_prompt(code_dir: str) -> str:
