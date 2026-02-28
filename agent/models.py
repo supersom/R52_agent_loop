@@ -16,6 +16,8 @@ class LoopConfig:
     verify_timeout_sec: int
     expected_output: str
     board_name: str
+    edit_dir: str
+    run_dir: str
     code_dir: str
     source_file: str
     elf_file: str

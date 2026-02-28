@@ -38,13 +38,18 @@ def run_agent_loop(config: LoopConfig) -> None:
         repo_context_files = None
         if config.repo_mode:
             context_block, repo_context_files = build_repo_attempt_context(
-                repo_dir=config.repo_dir or config.code_dir,
+                repo_dir=config.repo_dir or config.edit_dir,
                 entry_file_rel=config.entry_file_rel,
                 query_text=current_prompt + "\n" + last_attempt_feedback,
             )
             attempt_prompt = current_prompt + "\n\n" + context_block
 
-        llm_response = call_llm(attempt_prompt, config.code_dir, config.task_contract_prompt)
+        llm_response = call_llm(
+            attempt_prompt,
+            writable_dir=config.edit_dir,
+            log_dir=config.run_dir,
+            task_contract_prompt=config.task_contract_prompt,
+        )
         previous_code = current_source
         parsed_edits = None
         edit_output_sanitized = False
@@ -55,7 +60,7 @@ def run_agent_loop(config: LoopConfig) -> None:
                 if edit_output_sanitized:
                     print("[Loop] Stripped non-JSON wrapper text from edits response before applying.")
                 edited_files = apply_workspace_edit_instructions(
-                    config.code_dir,
+                    config.edit_dir,
                     parsed_edits,
                     default_path=config.entry_file_rel,
                 )
@@ -201,7 +206,7 @@ def run_agent_loop(config: LoopConfig) -> None:
 
         if config.repo_mode:
             verify_result = run_repo_verification(
-                repo_dir=config.repo_dir or config.code_dir,
+                repo_dir=config.repo_dir or config.edit_dir,
                 build_cmd=config.build_cmd or "",
                 test_cmd=config.test_cmd,
                 timeout_sec=config.verify_timeout_sec,

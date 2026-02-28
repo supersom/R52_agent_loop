@@ -24,11 +24,16 @@ def strip_markdown_fences(text: str) -> str:
     return "\n".join(code_lines)
 
 
-def call_llm(input_prompt: str, code_dir: str, task_contract_prompt: str = "") -> str:
+def call_llm(
+    input_prompt: str,
+    writable_dir: str,
+    log_dir: str,
+    task_contract_prompt: str = "",
+) -> str:
     """
     Call the local `gemini` CLI and return generated source text.
     """
-    prompt_parts = [build_llm_system_prompt(code_dir)]
+    prompt_parts = [build_llm_system_prompt(writable_dir)]
     if task_contract_prompt:
         prompt_parts.append(task_contract_prompt)
     prompt_parts.append(input_prompt)
@@ -36,11 +41,12 @@ def call_llm(input_prompt: str, code_dir: str, task_contract_prompt: str = "") -
     print(f"\n[LLM] Generating code... (Prompt length: {len(prompt)})")
     print(f"[LLM] --- Prompt Sent ---\n{prompt}\n-----------------------")
 
-    prompt_file = os.path.join(code_dir, "current_prompt.txt")
+    os.makedirs(log_dir, exist_ok=True)
+    prompt_file = os.path.join(log_dir, "current_prompt.txt")
     with open(prompt_file, "w") as f:
         f.write(prompt)
 
-    debug_log_path = os.path.join(code_dir, "llm_debug.log")
+    debug_log_path = os.path.join(log_dir, "llm_debug.log")
     print(f"[LLM] --- Streaming Response (Debug logs routed to {debug_log_path}) ---")
     try:
         with open(debug_log_path, "a") as debug_file:

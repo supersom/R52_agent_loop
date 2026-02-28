@@ -42,6 +42,17 @@ def get_prompt_run_dir(code_root: str, prompt_path: str) -> str:
     return os.path.join(code_root, prompt_name)
 
 
+def make_timestamped_run_dir(prompt_run_dir: str) -> str:
+    """
+    Create and return a timestamped per-run artifact directory under prompt_run_dir.
+    """
+    os.makedirs(prompt_run_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    run_dir = os.path.join(prompt_run_dir, timestamp)
+    os.makedirs(run_dir, exist_ok=False)
+    return run_dir
+
+
 def snapshot_successful_run(code_dir: str) -> str:
     """
     Copy top-level generated files from the active prompt directory into a timestamped snapshot.
