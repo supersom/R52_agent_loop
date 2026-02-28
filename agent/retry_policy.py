@@ -3,20 +3,20 @@ from typing import Literal
 
 from agent.prompting import (
     build_compile_failure_full_source_prompt,
-    build_compile_failure_patch_issue,
+    build_compile_failure_edit_issue,
+    build_edit_apply_fallback_full_source_prompt,
+    build_edit_apply_issue_prompt,
+    build_edit_retry_prompt,
     build_output_mismatch_full_source_prompt,
-    build_output_mismatch_patch_issue,
-    build_patch_apply_issue_prompt,
-    build_patch_context_mismatch_full_source_prompt,
-    build_patch_retry_prompt,
+    build_output_mismatch_edit_issue,
     build_source_validation_issue_prompt,
     build_timeout_full_source_prompt,
-    build_timeout_patch_issue,
+    build_timeout_edit_issue,
 )
 
-ResponseMode = Literal["full_source", "patch"]
+ResponseMode = Literal["full_source", "edits"]
 RetryOutcome = Literal[
-    "patch_apply_failed",
+    "edit_apply_failed",
     "source_validation_failed",
     "compile_failed",
     "run_timed_out",
@@ -37,41 +37,56 @@ def decide_next_retry(
     outcome: RetryOutcome,
     current_mode: ResponseMode,
     incremental: bool,
+    incremental_strict: bool = False,
     current_source: str,
     expected_output: str,
     board_name: str,
     compile_error: str | None = None,
     run_output: str | None = None,
     validation_error: str | None = None,
-    patch_apply_error: str | None = None,
+    edit_apply_error: str | None = None,
     last_attempt_feedback: str = "",
 ) -> RetryDecision:
-    if outcome == "patch_apply_failed":
-        if not patch_apply_error:
-            raise ValueError("patch_apply_error is required for patch_apply_failed")
-        patch_apply_issue = build_patch_apply_issue_prompt(patch_apply_error, last_attempt_feedback)
-        if "Patch context does not match current source" in patch_apply_error:
+    if outcome == "edit_apply_failed":
+        if not edit_apply_error:
+            raise ValueError("edit_apply_error is required for edit_apply_failed")
+        edit_apply_issue = build_edit_apply_issue_prompt(edit_apply_error, last_attempt_feedback)
+        if any(
+            token in edit_apply_error
+            for token in ("not found in current source", "matched", "out of range")
+        ):
+            if incremental and incremental_strict:
+                return RetryDecision(
+                    next_prompt=build_edit_retry_prompt(
+                        current_source,
+                        edit_apply_issue
+                        + "Strict incremental mode is enabled. Stay in JSON edits mode and "
+                        "provide corrected, unambiguous edit instructions for the current source.",
+                    ),
+                    next_mode="edits",
+                    note="Strict incremental mode: keeping next retry in edits mode despite edit/source mismatch.",
+                )
             return RetryDecision(
-                next_prompt=build_patch_context_mismatch_full_source_prompt(current_source, patch_apply_issue),
+                next_prompt=build_edit_apply_fallback_full_source_prompt(current_source, edit_apply_issue),
                 next_mode="full_source",
-                note="Switching next retry to full source mode due to patch context mismatch.",
+                note="Switching next retry to full source mode due to edit/source mismatch.",
             )
         return RetryDecision(
-            next_prompt=build_patch_retry_prompt(
+            next_prompt=build_edit_retry_prompt(
                 current_source,
-                patch_apply_issue + "Return a valid unified diff patch against the current `agent_code.s`.",
+                edit_apply_issue + "Return valid JSON edit instructions against the current `agent_code.s`.",
             ),
-            next_mode="patch",
+            next_mode="edits",
         )
 
     if outcome == "source_validation_failed":
         if not validation_error:
             raise ValueError("validation_error is required for source_validation_failed")
         validation_issue = build_source_validation_issue_prompt(validation_error)
-        if current_mode == "patch":
+        if current_mode == "edits":
             return RetryDecision(
-                next_prompt=build_patch_retry_prompt(current_source, validation_issue),
-                next_mode="patch",
+                next_prompt=build_edit_retry_prompt(current_source, validation_issue),
+                next_mode="edits",
             )
         return RetryDecision(
             next_prompt=validation_issue,
@@ -83,11 +98,11 @@ def decide_next_retry(
             raise ValueError("compile_error is required for compile_failed")
         if incremental:
             return RetryDecision(
-                next_prompt=build_patch_retry_prompt(
+                next_prompt=build_edit_retry_prompt(
                     current_source,
-                    build_compile_failure_patch_issue(compile_error),
+                    build_compile_failure_edit_issue(compile_error),
                 ),
-                next_mode="patch",
+                next_mode="edits",
             )
         return RetryDecision(
             next_prompt=build_compile_failure_full_source_prompt(compile_error),
@@ -99,11 +114,11 @@ def decide_next_retry(
             raise ValueError("run_output is required for run_timed_out")
         if incremental:
             return RetryDecision(
-                next_prompt=build_patch_retry_prompt(
+                next_prompt=build_edit_retry_prompt(
                     current_source,
-                    build_timeout_patch_issue(board_name, run_output),
+                    build_timeout_edit_issue(board_name, run_output),
                 ),
-                next_mode="patch",
+                next_mode="edits",
             )
         return RetryDecision(
             next_prompt=build_timeout_full_source_prompt(board_name, run_output),
@@ -115,11 +130,11 @@ def decide_next_retry(
             raise ValueError("run_output is required for run_output_mismatch/run_failed")
         if incremental:
             return RetryDecision(
-                next_prompt=build_patch_retry_prompt(
+                next_prompt=build_edit_retry_prompt(
                     current_source,
-                    build_output_mismatch_patch_issue(expected_output, run_output),
+                    build_output_mismatch_edit_issue(expected_output, run_output),
                 ),
-                next_mode="patch",
+                next_mode="edits",
             )
         return RetryDecision(
             next_prompt=build_output_mismatch_full_source_prompt(expected_output, run_output),

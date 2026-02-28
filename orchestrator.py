@@ -15,10 +15,14 @@ TOOLCHAIN_BINARIES = load_toolchain_binaries_from_env()
 
 def main():
     args = parse_args()
+    incremental_mode = args.incremental if args.incremental is not None else "off"
 
     check_git_status(auto_yes=args.yes)
 
-    print(f"=== Starting Agentic ARM Development Loop (Toolchain: {args.toolchain}, Incremental: {args.incremental}) ===")
+    print(
+        "=== Starting Agentic ARM Development Loop "
+        f"(Toolchain: {args.toolchain}, Incremental: {incremental_mode}) ==="
+    )
 
     try:
         loop_config = build_loop_config(

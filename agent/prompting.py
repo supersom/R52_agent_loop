@@ -17,7 +17,7 @@ def build_llm_system_prompt(code_dir: str) -> str:
         "Treat files outside that folder as read-only context.\n"
         "Do not hardcode the full expected output string verbatim if it contains the result.\n"
         "Compute the requested result in code and construct/emit the output from that computed value.\n"
-        "Return only the requested output content (source code or unified diff patch).\n"
+        "Return only the requested output content (source code or JSON edit instructions).\n"
     )
 
 
@@ -50,25 +50,34 @@ def build_task_contract_prompt(
     )
 
 
-def build_patch_retry_prompt(current_source: str, issue_text: str) -> str:
+def build_edit_retry_prompt(current_source: str, issue_text: str) -> str:
     """
-    Ask the LLM to minimally patch the current source instead of rewriting it.
+    Ask the LLM to minimally edit the current source instead of rewriting it.
     """
     return (
         f"{issue_text}\n\n"
         "Apply the smallest possible fix to the current `agent_code.s`.\n"
-        "Return ONLY a unified diff patch for `agent_code.s` (no prose, no markdown).\n"
-        "PATCH ACCURACY RULES (critical):\n"
-        "- The unified diff must apply cleanly to the CURRENT `agent_code.s` shown below.\n"
-        "- Copy unchanged context lines VERBATIM from the current file, including blank lines, spaces, and comments.\n"
-        "- Do not guess hunk headers. Ensure each `@@ -old,+new @@` header matches the exact context positions in the current file.\n"
-        "- The first context line after each hunk header must exactly match the current file at that old-line position.\n"
-        "- Do not include prose, explanations, markdown fences, or any text before/after the patch.\n"
-        "Expected format:\n"
-        "--- agent_code.s\n"
-        "+++ agent_code.s\n"
-        "@@ ... @@\n"
-        "...\n\n"
+        "Return ONLY JSON with this shape (no prose, no markdown):\n"
+        "{\n"
+        '  "edits": [\n'
+        "    {\n"
+        '      "op": "replace_snippet",\n'
+        '      "old": "...",\n'
+        '      "new": "...",\n'
+        '      "anchor": "...",\n'
+        '      "text": "...",\n'
+        '      "content": "...",\n'
+        '      "occurrence": 1\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "JSON EDIT RULES (critical):\n"
+        "- Allowed op values: replace_snippet, delete_snippet, insert_before, insert_after, append_text, prepend_text, replace_entire_file.\n"
+        "- Only include fields required by the chosen op.\n"
+        "- `replace_snippet` and `delete_snippet` must use exact snippets from the CURRENT file.\n"
+        "- If a snippet may appear multiple times, set `occurrence` (1-based).\n"
+        "- Do not include explanations, markdown fences, or any non-JSON text.\n"
+        "- Prefer a small number of focused edits over replacing the entire file.\n\n"
         "Current `agent_code.s`:\n"
         "```assembly\n"
         f"{current_source}\n"
@@ -76,27 +85,27 @@ def build_patch_retry_prompt(current_source: str, issue_text: str) -> str:
     )
 
 
-def build_patch_apply_issue_prompt(error: str, last_attempt_feedback: str) -> str:
+def build_edit_apply_issue_prompt(error: str, last_attempt_feedback: str) -> str:
     feedback = (
         "\nMost recent compile/runtime feedback from the previous attempt "
-        "(use this to fix the patch, not just the formatting):\n"
+        "(use this to fix the edit content, not just formatting):\n"
         f"{last_attempt_feedback}\n\n"
         if last_attempt_feedback
         else "\n"
     )
     return (
-        "Your previous response could not be applied as a unified diff patch.\n"
-        f"Patch apply error: {error}\n"
+        "Your previous response could not be applied as JSON edit instructions.\n"
+        f"Edit apply error: {error}\n"
         f"{feedback}"
     )
 
 
-def build_patch_context_mismatch_full_source_prompt(current_source: str, patch_apply_issue: str) -> str:
+def build_edit_apply_fallback_full_source_prompt(current_source: str, edit_apply_issue: str) -> str:
     return (
-        f"{patch_apply_issue}"
-        "Your patch content may be directionally correct, but the unified diff context did not "
-        "match the current file exactly.\n\n"
-        "For the next retry, do NOT return a patch.\n"
+        f"{edit_apply_issue}"
+        "Your intended fix may be directionally correct, but the edit instructions were not "
+        "safe to apply to the current file exactly.\n\n"
+        "For the next retry, do NOT return JSON edits.\n"
         "Return ONLY a full replacement for `agent_code.s` (no prose, no markdown).\n"
         "Make the smallest logical fix needed while preserving the working parts.\n\n"
         "Current `agent_code.s`:\n"
@@ -114,7 +123,7 @@ def build_source_validation_issue_prompt(source_validation_error: str) -> str:
     )
 
 
-def build_compile_failure_patch_issue(compile_error: str) -> str:
+def build_compile_failure_edit_issue(compile_error: str) -> str:
     return (
         "Your previous code failed to compile with the following error:\n"
         f"{compile_error}\n\n"
@@ -130,7 +139,7 @@ def build_compile_failure_full_source_prompt(compile_error: str) -> str:
     )
 
 
-def build_timeout_patch_issue(board_name: str, run_output: str) -> str:
+def build_timeout_edit_issue(board_name: str, run_output: str) -> str:
     return (
         f"The code compiled successfully, but running it in {board_name} timed out after multiple attempts.\n"
         f"Output before timeout:\n{run_output}\n\n"
@@ -147,7 +156,7 @@ def build_timeout_full_source_prompt(board_name: str, run_output: str) -> str:
     )
 
 
-def build_output_mismatch_patch_issue(expected_output: str, run_output: str) -> str:
+def build_output_mismatch_edit_issue(expected_output: str, run_output: str) -> str:
     return (
         "The code compiled successfully and completed, but the expected output was not found.\n"
         f"Output:\n{run_output}\n\n"
@@ -162,3 +171,28 @@ def build_output_mismatch_full_source_prompt(expected_output: str, run_output: s
         f"We expect the exact string '{expected_output}' to be printed to the UART. "
         "Please fix the logic and return ONLY the corrected assembly/C code."
     )
+
+
+# Backward-compatible aliases while migrating from unified diff patching.
+def build_patch_retry_prompt(current_source: str, issue_text: str) -> str:
+    return build_edit_retry_prompt(current_source, issue_text)
+
+
+def build_patch_apply_issue_prompt(error: str, last_attempt_feedback: str) -> str:
+    return build_edit_apply_issue_prompt(error, last_attempt_feedback)
+
+
+def build_patch_context_mismatch_full_source_prompt(current_source: str, patch_apply_issue: str) -> str:
+    return build_edit_apply_fallback_full_source_prompt(current_source, patch_apply_issue)
+
+
+def build_compile_failure_patch_issue(compile_error: str) -> str:
+    return build_compile_failure_edit_issue(compile_error)
+
+
+def build_timeout_patch_issue(board_name: str, run_output: str) -> str:
+    return build_timeout_edit_issue(board_name, run_output)
+
+
+def build_output_mismatch_patch_issue(expected_output: str, run_output: str) -> str:
+    return build_output_mismatch_edit_issue(expected_output, run_output)

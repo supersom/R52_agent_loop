@@ -19,6 +19,10 @@ def build_loop_config(
     args: Namespace,
     toolchain_binaries: ToolchainBinaries,
 ) -> LoopConfig:
+    incremental_mode = args.incremental
+    incremental_enabled = incremental_mode is not None
+    incremental_strict = incremental_mode == "strict"
+
     uart_addr, board_name = get_target_details(args.toolchain)
     existing_code_context = collect_existing_code_context(args.source)
 
@@ -59,7 +63,8 @@ def build_loop_config(
 
     return LoopConfig(
         toolchain=args.toolchain,
-        incremental=args.incremental,
+        incremental=incremental_enabled,
+        incremental_strict=incremental_strict,
         expected_output=args.expected,
         board_name=board_name,
         code_dir=code_dir,

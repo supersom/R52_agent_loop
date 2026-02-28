@@ -37,8 +37,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--incremental",
-        action="store_true",
-        help="Use incremental patch retries (unified diff) instead of full-source retries",
+        nargs="?",
+        const="normal",
+        choices=["normal", "strict"],
+        default=None,
+        help=(
+            "Use incremental JSON edit retries instead of full-source retries. "
+            "Optional mode: 'strict' prevents fallback to full-source after edit-apply failures."
+        ),
     )
     return parser.parse_args()
 

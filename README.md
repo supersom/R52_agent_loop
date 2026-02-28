@@ -80,12 +80,19 @@ Seed the prompt with an existing codebase for incremental changes:
 python3 orchestrator.py --source /path/to/codebase
 ```
 
+Use strict incremental mode (never fall back to full-source retries after edit-apply failures):
+
+```bash
+python3 orchestrator.py --incremental strict
+```
+
 ## CLI Options
 
 - `--toolchain {gcc,ds5}`: compile/run path (`gcc` default)
 - `--source <dir>`: include existing code files (`.c`, `.h`, `.s`, `.S`, `.ld`, `Makefile`) in the LLM prompt
 - `--prompt <path>`: prompt template path (default `prompts/prime_sum.txt`)
 - `--expected <string>`: required output substring checked in simulator output (default `SUM: 129`)
+- `--incremental [normal|strict]`: use incremental JSON edit retries (`--incremental` == `normal`; `strict` prevents fallback to full-source on edit-apply failures)
 
 ## Files
 

@@ -7,6 +7,7 @@ from agent.toolchain import ToolchainBinaries
 class LoopConfig:
     toolchain: str
     incremental: bool
+    incremental_strict: bool
     expected_output: str
     board_name: str
     code_dir: str
