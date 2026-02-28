@@ -62,6 +62,8 @@ def build_edit_retry_prompt(current_source: str, issue_text: str) -> str:
         '  "edits": [\n'
         "    {\n"
         '      "op": "replace_snippet",\n'
+        '      "path": "relative/path/to/file",\n'
+        '      "new_path": "relative/path/to/new_file",\n'
         '      "old": "...",\n'
         '      "new": "...",\n'
         '      "anchor": "...",\n'
@@ -72,7 +74,10 @@ def build_edit_retry_prompt(current_source: str, issue_text: str) -> str:
         "  ]\n"
         "}\n"
         "JSON EDIT RULES (critical):\n"
-        "- Allowed op values: replace_snippet, delete_snippet, insert_before, insert_after, append_text, prepend_text, replace_entire_file.\n"
+        "- Allowed op values: replace_snippet, delete_snippet, insert_before, insert_after, append_text, prepend_text, replace_entire_file, create_file, delete_file, move_file.\n"
+        "- `path` must be a relative path under the active writable folder. Never use absolute paths and never use `..` segments.\n"
+        "- For text edit ops, omit `path` only when editing `agent_code.s`; include `path` for any other file.\n"
+        "- `create_file` requires `path` + `content`. `delete_file` requires `path`. `move_file` requires `path` + `new_path`.\n"
         "- Only include fields required by the chosen op.\n"
         "- `replace_snippet` and `delete_snippet` must use exact snippets from the CURRENT file.\n"
         "- If a snippet may appear multiple times, set `occurrence` (1-based).\n"

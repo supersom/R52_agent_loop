@@ -93,6 +93,7 @@ python3 orchestrator.py --incremental strict
 - `--prompt <path>`: prompt template path (default `prompts/prime_sum.txt`)
 - `--expected <string>`: required output substring checked in simulator output (default `SUM: 129`)
 - `--incremental [normal|strict]`: use incremental JSON edit retries (`--incremental` == `normal`; `strict` prevents fallback to full-source on edit-apply failures)
+  - Incremental JSON edits now support path-aware multi-file operations under the active output folder (`path`, `new_path`, `create_file`, `delete_file`, `move_file`).
 
 ## Files
 

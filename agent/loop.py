@@ -1,7 +1,7 @@
 import difflib
 import os
 
-from agent.edits import apply_edit_instructions, parse_edit_instructions
+from agent.edits import apply_workspace_edit_instructions, parse_edit_instructions
 from agent.history import RunHistory
 from agent.llm_client import call_llm
 from agent.models import LoopConfig
@@ -37,12 +37,23 @@ def run_agent_loop(config: LoopConfig) -> None:
         previous_code = current_source
         parsed_edits = None
         edit_output_sanitized = False
+        edited_files = None
         if response_mode == "edits":
             try:
                 parsed_edits, edit_output_sanitized = parse_edit_instructions(llm_response)
                 if edit_output_sanitized:
                     print("[Loop] Stripped non-JSON wrapper text from edits response before applying.")
-                generated_code = apply_edit_instructions(current_source, parsed_edits)
+                edited_files = apply_workspace_edit_instructions(
+                    config.code_dir,
+                    parsed_edits,
+                    default_path=os.path.basename(config.source_file),
+                )
+                if not os.path.exists(config.source_file):
+                    raise ValueError(
+                        f"Incremental edits removed required source file '{os.path.basename(config.source_file)}'"
+                    )
+                with open(config.source_file, "r") as f:
+                    generated_code = f.read()
             except ValueError as e:
                 print(f"[Loop] Could not apply edit response: {e}")
                 run_history.append(
@@ -52,6 +63,7 @@ def run_agent_loop(config: LoopConfig) -> None:
                         "response_mode": response_mode,
                         "generated_code": llm_response.splitlines(),
                         "diff": [],
+                        "edited_files": edited_files,
                         "edit_operations": parsed_edits,
                         "edit_apply_success": False,
                         "edit_apply_error": str(e),
@@ -100,6 +112,7 @@ def run_agent_loop(config: LoopConfig) -> None:
                     "response_mode": response_mode,
                     "generated_code": generated_code.splitlines(),
                     "diff": [],
+                    "edited_files": edited_files if response_mode == "edits" else None,
                     "edit_operations": parsed_edits if response_mode == "edits" else None,
                     "edit_apply_success": True if response_mode == "edits" else None,
                     "edit_apply_error": None,
@@ -144,6 +157,7 @@ def run_agent_loop(config: LoopConfig) -> None:
                 "response_mode": response_mode,
                 "generated_code": generated_code.splitlines(),
                 "diff": diff_str.splitlines(),
+                "edited_files": edited_files if response_mode == "edits" else None,
                 "edit_operations": parsed_edits if response_mode == "edits" else None,
                 "edit_apply_success": True if response_mode == "edits" else None,
                 "edit_apply_error": None,
