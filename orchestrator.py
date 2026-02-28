@@ -16,12 +16,13 @@ TOOLCHAIN_BINARIES = load_toolchain_binaries_from_env()
 def main():
     args = parse_args()
     incremental_mode = args.incremental if args.incremental is not None else "off"
+    mode = f"repo:{args.repo}" if args.repo else "arm"
 
     check_git_status(auto_yes=args.yes)
 
     print(
         "=== Starting Agentic ARM Development Loop "
-        f"(Toolchain: {args.toolchain}, Incremental: {incremental_mode}) ==="
+        f"(Mode: {mode}, Toolchain: {args.toolchain}, Incremental: {incremental_mode}) ==="
     )
 
     try:
@@ -29,7 +30,7 @@ def main():
             args=args,
             toolchain_binaries=TOOLCHAIN_BINARIES,
         )
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         print(str(e))
         sys.exit(1)
 

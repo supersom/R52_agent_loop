@@ -68,6 +68,18 @@ Run the Fibonacci prompt:
 python3 orchestrator.py --prompt prompts/fibonacci.txt --expected "FIB: 5"
 ```
 
+Run in repository mode (generic build/test verification):
+
+```bash
+python3 orchestrator.py \
+  --repo /path/to/repo \
+  --entry-file src/main.py \
+  --build-cmd "python -m compileall src" \
+  --test-cmd "pytest -q" \
+  --incremental strict \
+  --prompt prompts/my_repo_task.md
+```
+
 Use the DS-5/FVP toolchain path:
 
 ```bash
@@ -94,6 +106,11 @@ python3 orchestrator.py --incremental strict
 - `--expected <string>`: required output substring checked in simulator output (default `SUM: 129`)
 - `--incremental [normal|strict]`: use incremental JSON edit retries (`--incremental` == `normal`; `strict` prevents fallback to full-source on edit-apply failures)
   - Incremental JSON edits now support path-aware multi-file operations under the active output folder (`path`, `new_path`, `create_file`, `delete_file`, `move_file`).
+- `--repo <dir>`: enable repo mode and edit/verify files directly inside this repository path
+- `--entry-file <relpath>`: primary file used for full-source retries and default edit target in repo mode (default `agent_code.s`)
+- `--build-cmd <cmd>`: required in repo mode; command used for verification
+- `--test-cmd <cmd>`: optional in repo mode; runs after successful build command
+- `--verify-timeout <sec>`: timeout for each repo verification command (default `120`)
 
 ## Files
 

@@ -8,6 +8,12 @@ class LoopConfig:
     toolchain: str
     incremental: bool
     incremental_strict: bool
+    repo_mode: bool
+    repo_dir: str | None
+    entry_file_rel: str
+    build_cmd: str | None
+    test_cmd: str | None
+    verify_timeout_sec: int
     expected_output: str
     board_name: str
     code_dir: str

@@ -24,6 +24,36 @@ def parse_args() -> argparse.Namespace:
         default=None,
     )
     parser.add_argument(
+        "--repo",
+        type=str,
+        help="Path to a repository to edit/verify in repo mode.",
+        default=None,
+    )
+    parser.add_argument(
+        "--entry-file",
+        type=str,
+        help="Primary editable file path (relative to output/repo dir).",
+        default="agent_code.s",
+    )
+    parser.add_argument(
+        "--build-cmd",
+        type=str,
+        help="Build command for repo mode (required when --repo is set).",
+        default=None,
+    )
+    parser.add_argument(
+        "--test-cmd",
+        type=str,
+        help="Optional test command for repo mode.",
+        default=None,
+    )
+    parser.add_argument(
+        "--verify-timeout",
+        type=int,
+        help="Timeout in seconds for each repo-mode verify command.",
+        default=120,
+    )
+    parser.add_argument(
         "--prompt",
         type=str,
         help="Path to a custom prompt file in the prompts/ folder.",
@@ -46,7 +76,12 @@ def parse_args() -> argparse.Namespace:
             "Optional mode: 'strict' prevents fallback to full-source after edit-apply failures."
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.repo and not args.build_cmd:
+        parser.error("--build-cmd is required when --repo is set")
+    if args.verify_timeout <= 0:
+        parser.error("--verify-timeout must be > 0")
+    return args
 
 
 def check_git_status(auto_yes: bool = False) -> None:

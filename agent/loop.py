@@ -11,7 +11,7 @@ from agent.response_filters import (
     sanitize_full_source_text,
     validate_arm_asm_source_text,
 )
-from agent.toolchain import compile_code, run_in_simulator
+from agent.toolchain import compile_code, run_in_simulator, run_repo_verification
 from agent.workspace import snapshot_successful_run
 
 
@@ -26,9 +26,9 @@ def run_agent_loop(config: LoopConfig) -> None:
         with open(config.source_file, "r") as f:
             current_source = f.read()
         print(f"[Info] Loaded existing working source from {config.source_file} for iterative updates")
-        if config.incremental:
-            response_mode = "edits"
-            print("[Info] Incremental mode enabled with existing source; starting retries in JSON edits mode.")
+    if config.incremental and (current_source or config.repo_mode):
+        response_mode = "edits"
+        print("[Info] Incremental mode enabled; starting retries in JSON edits mode.")
 
     for attempt in range(1, config.max_retries + 1):
         print(f"\n--- Attempt {attempt}/{config.max_retries} ---")
@@ -46,11 +46,11 @@ def run_agent_loop(config: LoopConfig) -> None:
                 edited_files = apply_workspace_edit_instructions(
                     config.code_dir,
                     parsed_edits,
-                    default_path=os.path.basename(config.source_file),
+                    default_path=config.entry_file_rel,
                 )
                 if not os.path.exists(config.source_file):
                     raise ValueError(
-                        f"Incremental edits removed required source file '{os.path.basename(config.source_file)}'"
+                        f"Incremental edits removed required source file '{config.entry_file_rel}'"
                     )
                 with open(config.source_file, "r") as f:
                     generated_code = f.read()
@@ -97,12 +97,15 @@ def run_agent_loop(config: LoopConfig) -> None:
             sanitized_full_source = sanitize_full_source_text(llm_response)
             if sanitized_full_source != llm_response:
                 print("[Loop] Stripped trailing non-code output from full-source response before writing.")
-            extracted_source, extraction_note = extract_arm_asm_block(sanitized_full_source)
-            if extraction_note:
-                print(f"[Loop] {extraction_note} from full-source response before validation.")
-            generated_code = extracted_source
+            if config.repo_mode:
+                generated_code = sanitized_full_source
+            else:
+                extracted_source, extraction_note = extract_arm_asm_block(sanitized_full_source)
+                if extraction_note:
+                    print(f"[Loop] {extraction_note} from full-source response before validation.")
+                generated_code = extracted_source
 
-        source_validation_error = validate_arm_asm_source_text(generated_code)
+        source_validation_error = None if config.repo_mode else validate_arm_asm_source_text(generated_code)
         if source_validation_error:
             print(f"[Loop] Rejected non-assembly response before writing source: {source_validation_error}")
             run_history.append(
@@ -176,8 +179,54 @@ def run_agent_loop(config: LoopConfig) -> None:
 
         current_source = generated_code
 
+        source_parent = os.path.dirname(config.source_file)
+        if source_parent:
+            os.makedirs(source_parent, exist_ok=True)
         with open(config.source_file, "w") as f:
             f.write(generated_code)
+
+        if config.repo_mode:
+            verify_result = run_repo_verification(
+                repo_dir=config.repo_dir or config.code_dir,
+                build_cmd=config.build_cmd or "",
+                test_cmd=config.test_cmd,
+                timeout_sec=config.verify_timeout_sec,
+            )
+            entry["verify_success"] = verify_result.success
+            entry["verify_stage"] = verify_result.stage
+            entry["verify_timed_out"] = verify_result.timed_out
+            entry["verify_output"] = RunHistory.lines(verify_result.output)
+
+            if not verify_result.success:
+                entry["attempt_result"] = "verification_failed"
+                run_history.flush()
+                print("[Loop] Repo verification failed. Feeding output back to agent...")
+                last_attempt_feedback = verify_result.output
+                retry_decision = decide_next_retry(
+                    outcome="verification_failed",
+                    current_mode=response_mode,
+                    incremental=config.incremental,
+                    incremental_strict=config.incremental_strict,
+                    current_source=current_source,
+                    expected_output=config.expected_output,
+                    board_name=config.board_name,
+                    verification_error=verify_result.output,
+                    verification_stage=verify_result.stage,
+                    verification_timed_out=verify_result.timed_out,
+                )
+                current_prompt = retry_decision.next_prompt
+                response_mode = retry_decision.next_mode
+                continue
+
+            entry["run_success"] = True
+            entry["run_output"] = RunHistory.lines(verify_result.output)
+            entry["timed_out"] = False
+            entry["attempt_result"] = "success"
+            run_history.flush()
+            snapshot_dir = snapshot_successful_run(config.code_dir)
+            print("\n=== SUCCESS! Repository verification passed. ===")
+            print(f"[Info] Snapshot saved to {snapshot_dir}")
+            break
 
         compile_success, compile_error = compile_code(
             source_file=config.source_file,

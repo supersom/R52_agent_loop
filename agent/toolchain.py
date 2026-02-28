@@ -15,6 +15,14 @@ class ToolchainBinaries:
     fvp_bin: str
 
 
+@dataclass(frozen=True)
+class RepoVerifyResult:
+    success: bool
+    stage: str | None
+    output: str
+    timed_out: bool
+
+
 def load_toolchain_binaries_from_env() -> ToolchainBinaries:
     return ToolchainBinaries(
         armclang_bin=os.environ.get("ARMCLANG_BIN", DEFAULT_ARMCLANG_BIN),
@@ -135,3 +143,71 @@ def run_in_simulator(
         return True, output, True
     except Exception as e:
         return False, str(e), False
+
+
+def run_repo_verification(
+    *,
+    repo_dir: str,
+    build_cmd: str,
+    test_cmd: str | None = None,
+    timeout_sec: int = 120,
+) -> RepoVerifyResult:
+    """
+    Run build/test verification commands for repository mode.
+    """
+
+    def run_stage(stage: str, cmd: str) -> RepoVerifyResult:
+        header = f"[RepoVerify] {stage}: {cmd}\n"
+        try:
+            completed = subprocess.run(
+                ["bash", "-lc", cmd],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired as e:
+            timed_output = str(e.stdout or "") + str(e.stderr or "")
+            return RepoVerifyResult(
+                success=False,
+                stage=stage,
+                output=header + timed_output,
+                timed_out=True,
+            )
+        except OSError as e:
+            return RepoVerifyResult(
+                success=False,
+                stage=stage,
+                output=header + str(e),
+                timed_out=False,
+            )
+
+        output = header + (completed.stdout or "") + (completed.stderr or "")
+        return RepoVerifyResult(
+            success=completed.returncode == 0,
+            stage=stage,
+            output=output,
+            timed_out=False,
+        )
+
+    build_result = run_stage("build", build_cmd)
+    if not build_result.success:
+        return build_result
+
+    if test_cmd:
+        test_result = run_stage("test", test_cmd)
+        if not test_result.success:
+            return test_result
+        return RepoVerifyResult(
+            success=True,
+            stage="test",
+            output=build_result.output + "\n" + test_result.output,
+            timed_out=False,
+        )
+
+    return RepoVerifyResult(
+        success=True,
+        stage="build",
+        output=build_result.output,
+        timed_out=False,
+    )

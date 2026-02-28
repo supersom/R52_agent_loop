@@ -50,6 +50,31 @@ def build_task_contract_prompt(
     )
 
 
+def build_repo_task_contract_prompt(
+    *,
+    prompt_name: str,
+    repo_dir: str,
+    entry_file_rel: str,
+    build_cmd: str,
+    test_cmd: str | None,
+    formatted_prompt: str,
+) -> str:
+    test_line = f"- Test command: {test_cmd}\n" if test_cmd else ""
+    return (
+        "TASK CONTRACT (repo mode; applies to every attempt, including retries):\n"
+        f"- Prompt template: {prompt_name}\n"
+        f"- Repository root: {repo_dir}\n"
+        f"- Primary file: {entry_file_rel}\n"
+        f"- Build command: {build_cmd}\n"
+        f"{test_line}"
+        "- Make the smallest correct set of file changes.\n"
+        "- Prefer JSON edit instructions in incremental mode.\n"
+        "- The original task statement below remains in force for all attempts.\n\n"
+        "Original task statement:\n"
+        f"{formatted_prompt}\n"
+    )
+
+
 def build_edit_retry_prompt(current_source: str, issue_text: str) -> str:
     """
     Ask the LLM to minimally edit the current source instead of rewriting it.
@@ -141,6 +166,23 @@ def build_compile_failure_full_source_prompt(compile_error: str) -> str:
         "Your previous code failed to compile with the following error:\n"
         f"{compile_error}\n\n"
         "Please fix the code and return ONLY the corrected assembly/C code."
+    )
+
+
+def build_verification_failure_issue(stage: str | None, output: str, timed_out: bool) -> str:
+    stage_text = stage or "verification"
+    timeout_text = "timed out" if timed_out else "failed"
+    return (
+        f"The {stage_text} command {timeout_text}.\n"
+        f"Command output:\n{output}\n\n"
+        "Please fix the implementation so verification passes."
+    )
+
+
+def build_verification_failure_full_source_prompt(stage: str | None, output: str, timed_out: bool) -> str:
+    return (
+        build_verification_failure_issue(stage, output, timed_out)
+        + "\nReturn ONLY the corrected source output (no prose, no markdown)."
     )
 
 

@@ -10,6 +10,8 @@ from agent.prompting import (
     build_output_mismatch_full_source_prompt,
     build_output_mismatch_edit_issue,
     build_source_validation_issue_prompt,
+    build_verification_failure_full_source_prompt,
+    build_verification_failure_issue,
     build_timeout_full_source_prompt,
     build_timeout_edit_issue,
 )
@@ -19,6 +21,7 @@ RetryOutcome = Literal[
     "edit_apply_failed",
     "source_validation_failed",
     "compile_failed",
+    "verification_failed",
     "run_timed_out",
     "run_output_mismatch",
     "run_failed",
@@ -42,6 +45,9 @@ def decide_next_retry(
     expected_output: str,
     board_name: str,
     compile_error: str | None = None,
+    verification_error: str | None = None,
+    verification_stage: str | None = None,
+    verification_timed_out: bool = False,
     run_output: str | None = None,
     validation_error: str | None = None,
     edit_apply_error: str | None = None,
@@ -106,6 +112,30 @@ def decide_next_retry(
             )
         return RetryDecision(
             next_prompt=build_compile_failure_full_source_prompt(compile_error),
+            next_mode="full_source",
+        )
+
+    if outcome == "verification_failed":
+        if verification_error is None:
+            raise ValueError("verification_error is required for verification_failed")
+        if incremental:
+            return RetryDecision(
+                next_prompt=build_edit_retry_prompt(
+                    current_source,
+                    build_verification_failure_issue(
+                        verification_stage,
+                        verification_error,
+                        verification_timed_out,
+                    ),
+                ),
+                next_mode="edits",
+            )
+        return RetryDecision(
+            next_prompt=build_verification_failure_full_source_prompt(
+                verification_stage,
+                verification_error,
+                verification_timed_out,
+            ),
             next_mode="full_source",
         )
 

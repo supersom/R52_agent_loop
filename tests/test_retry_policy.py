@@ -63,6 +63,27 @@ class RetryPolicyTests(unittest.TestCase):
         self.assertEqual(decision.next_mode, "full_source")
         self.assertIn("failed to compile", decision.next_prompt)
 
+    def test_verification_failed_non_incremental_uses_full_source(self):
+        decision = decide_next_retry(
+            outcome="verification_failed",
+            verification_error="pytest failed",
+            verification_stage="test",
+            **self._kwargs(),
+        )
+        self.assertEqual(decision.next_mode, "full_source")
+        self.assertIn("test command failed", decision.next_prompt)
+
+    def test_verification_failed_incremental_uses_edits(self):
+        decision = decide_next_retry(
+            outcome="verification_failed",
+            verification_error="make failed",
+            verification_stage="build",
+            **self._kwargs(incremental=True),
+        )
+        self.assertEqual(decision.next_mode, "edits")
+        self.assertIn("build command failed", decision.next_prompt)
+        self.assertIn("Return ONLY JSON", decision.next_prompt)
+
     def test_run_output_mismatch_incremental_uses_edits(self):
         decision = decide_next_retry(
             outcome="run_output_mismatch",
