@@ -5,6 +5,7 @@ from agent.edits import apply_workspace_edit_instructions, parse_edit_instructio
 from agent.history import RunHistory
 from agent.llm_client import call_llm
 from agent.models import LoopConfig
+from agent.repo_context import build_repo_attempt_context
 from agent.retry_policy import decide_next_retry
 from agent.response_filters import (
     extract_arm_asm_block,
@@ -33,7 +34,17 @@ def run_agent_loop(config: LoopConfig) -> None:
     for attempt in range(1, config.max_retries + 1):
         print(f"\n--- Attempt {attempt}/{config.max_retries} ---")
 
-        llm_response = call_llm(current_prompt, config.code_dir, config.task_contract_prompt)
+        attempt_prompt = current_prompt
+        repo_context_files = None
+        if config.repo_mode:
+            context_block, repo_context_files = build_repo_attempt_context(
+                repo_dir=config.repo_dir or config.code_dir,
+                entry_file_rel=config.entry_file_rel,
+                query_text=current_prompt + "\n" + last_attempt_feedback,
+            )
+            attempt_prompt = current_prompt + "\n\n" + context_block
+
+        llm_response = call_llm(attempt_prompt, config.code_dir, config.task_contract_prompt)
         previous_code = current_source
         parsed_edits = None
         edit_output_sanitized = False
@@ -59,8 +70,9 @@ def run_agent_loop(config: LoopConfig) -> None:
                 run_history.append(
                     {
                         "attempt": attempt,
-                        "prompt": current_prompt,
+                        "prompt": attempt_prompt,
                         "response_mode": response_mode,
+                        "repo_context_files": repo_context_files,
                         "generated_code": llm_response.splitlines(),
                         "diff": [],
                         "edited_files": edited_files,
@@ -111,8 +123,9 @@ def run_agent_loop(config: LoopConfig) -> None:
             run_history.append(
                 {
                     "attempt": attempt,
-                    "prompt": current_prompt,
+                    "prompt": attempt_prompt,
                     "response_mode": response_mode,
+                    "repo_context_files": repo_context_files,
                     "generated_code": generated_code.splitlines(),
                     "diff": [],
                     "edited_files": edited_files if response_mode == "edits" else None,
@@ -156,8 +169,9 @@ def run_agent_loop(config: LoopConfig) -> None:
         run_history.append(
             {
                 "attempt": attempt,
-                "prompt": current_prompt,
+                "prompt": attempt_prompt,
                 "response_mode": response_mode,
+                "repo_context_files": repo_context_files,
                 "generated_code": generated_code.splitlines(),
                 "diff": diff_str.splitlines(),
                 "edited_files": edited_files if response_mode == "edits" else None,

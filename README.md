@@ -111,6 +111,7 @@ python3 orchestrator.py --incremental strict
 - `--build-cmd <cmd>`: required in repo mode; command used for verification
 - `--test-cmd <cmd>`: optional in repo mode; runs after successful build command
 - `--verify-timeout <sec>`: timeout for each repo verification command (default `120`)
+  - Repo mode now uses compact per-attempt context selection (repo tree + targeted file snippets) instead of embedding the full repository every attempt.
 
 ## Files
 

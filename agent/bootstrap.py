@@ -25,8 +25,7 @@ def build_loop_config(
     repo_mode = args.repo is not None
 
     uart_addr, board_name = get_target_details(args.toolchain)
-    source_context_dir = args.repo if repo_mode else args.source
-    existing_code_context = collect_existing_code_context(source_context_dir)
+    existing_code_context = "" if repo_mode else collect_existing_code_context(args.source)
 
     prompt_path = os.path.join(WORKSPACE, args.prompt)
     if not os.path.exists(prompt_path):
